@@ -4,7 +4,7 @@ use super::*;
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger, MockAuth, MockAuthInvoke},
     token::{StellarAssetClient, TokenClient},
-    Address, Env, IntoVal,
+    Address, BytesN, Env, IntoVal, Symbol, Val,
 };
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
@@ -18,6 +18,50 @@ struct TestEnv {
     admin: Address,
     user: Address,
 }
+
+fn upload_upgrade_target_wasm(env: &Env) -> BytesN<32> {
+    env.deployer().upload_contract_wasm(ADD_I32_WASM)
+}
+
+const ADD_I32_WASM: &[u8] = &[
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x10, 0x03, 0x60, 0x02, 0x7e, 0x7e, 0x01,
+    0x7e, 0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7e, 0x60, 0x00, 0x00, 0x02, 0x0d, 0x02, 0x01, 0x78, 0x01,
+    0x31, 0x00, 0x00, 0x01, 0x76, 0x01, 0x67, 0x00, 0x00, 0x03, 0x04, 0x03, 0x00, 0x01, 0x02, 0x05,
+    0x03, 0x01, 0x00, 0x10, 0x06, 0x19, 0x03, 0x7f, 0x01, 0x41, 0x80, 0x80, 0xc0, 0x00, 0x0b, 0x7f,
+    0x00, 0x41, 0x80, 0x80, 0xc0, 0x00, 0x0b, 0x7f, 0x00, 0x41, 0x80, 0x80, 0xc0, 0x00, 0x0b, 0x07,
+    0x2f, 0x05, 0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x02, 0x00, 0x03, 0x61, 0x64, 0x64, 0x00,
+    0x02, 0x01, 0x5f, 0x00, 0x04, 0x0a, 0x5f, 0x5f, 0x64, 0x61, 0x74, 0x61, 0x5f, 0x65, 0x6e, 0x64,
+    0x03, 0x01, 0x0b, 0x5f, 0x5f, 0x68, 0x65, 0x61, 0x70, 0x5f, 0x62, 0x61, 0x73, 0x65, 0x03, 0x02,
+    0x0a, 0xe3, 0x01, 0x03, 0xc5, 0x01, 0x02, 0x04, 0x7f, 0x01, 0x7e, 0x23, 0x00, 0x41, 0x20, 0x6b,
+    0x22, 0x03, 0x24, 0x00, 0x02, 0x40, 0x20, 0x00, 0x42, 0xff, 0x01, 0x83, 0x42, 0x05, 0x52, 0x20,
+    0x01, 0x42, 0xff, 0x01, 0x83, 0x42, 0x05, 0x52, 0x72, 0x45, 0x04, 0x40, 0x20, 0x00, 0x42, 0x20,
+    0x88, 0xa7, 0x21, 0x04, 0x20, 0x01, 0x42, 0x20, 0x88, 0xa7, 0x21, 0x05, 0x20, 0x03, 0x42, 0x8e,
+    0xd2, 0xa9, 0x13, 0x37, 0x03, 0x08, 0x42, 0x02, 0x21, 0x06, 0x41, 0x01, 0x21, 0x02, 0x03, 0x40,
+    0x20, 0x02, 0x04, 0x40, 0x20, 0x02, 0x41, 0x01, 0x6b, 0x21, 0x02, 0x42, 0x8e, 0xd2, 0xa9, 0x13,
+    0x21, 0x06, 0x0c, 0x01, 0x0b, 0x0b, 0x20, 0x03, 0x20, 0x06, 0x37, 0x03, 0x10, 0x20, 0x03, 0x41,
+    0x10, 0x6a, 0x22, 0x02, 0x41, 0x01, 0x10, 0x03, 0x20, 0x03, 0x20, 0x01, 0x42, 0x80, 0x80, 0x80,
+    0x80, 0x70, 0x83, 0x42, 0x05, 0x84, 0x37, 0x03, 0x18, 0x20, 0x03, 0x20, 0x00, 0x42, 0x80, 0x80,
+    0x80, 0x80, 0x70, 0x83, 0x42, 0x05, 0x84, 0x37, 0x03, 0x10, 0x20, 0x02, 0x41, 0x02, 0x10, 0x03,
+    0x10, 0x00, 0x1a, 0x20, 0x05, 0x41, 0x00, 0x48, 0x20, 0x04, 0x20, 0x05, 0x6a, 0x22, 0x02, 0x20,
+    0x04, 0x48, 0x47, 0x0d, 0x01, 0x20, 0x03, 0x41, 0x20, 0x6a, 0x24, 0x00, 0x20, 0x02, 0xad, 0x42,
+    0x20, 0x86, 0x42, 0x05, 0x84, 0x0f, 0x0b, 0x00, 0x0b, 0x00, 0x0b, 0x16, 0x00, 0x20, 0x00, 0xad,
+    0x42, 0x20, 0x86, 0x42, 0x04, 0x84, 0x20, 0x01, 0xad, 0x42, 0x20, 0x86, 0x42, 0x04, 0x84, 0x10,
+    0x01, 0x0b, 0x03, 0x00, 0x01, 0x0b, 0x00, 0x4b, 0x0e, 0x63, 0x6f, 0x6e, 0x74, 0x72, 0x61, 0x63,
+    0x74, 0x73, 0x70, 0x65, 0x63, 0x76, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x03, 0x61, 0x64, 0x64, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x01, 0x61, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x01, 0x62, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x01, 0x00,
+    0x00, 0x00, 0x05, 0x00, 0x1e, 0x11, 0x63, 0x6f, 0x6e, 0x74, 0x72, 0x61, 0x63, 0x74, 0x65, 0x6e,
+    0x76, 0x6d, 0x65, 0x74, 0x61, 0x76, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x14, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x73, 0x0e, 0x63, 0x6f, 0x6e, 0x74, 0x72, 0x61, 0x63, 0x74, 0x6d, 0x65,
+    0x74, 0x61, 0x76, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x72, 0x73, 0x76, 0x65,
+    0x72, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x31, 0x2e, 0x37, 0x34, 0x2e, 0x30, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x72, 0x73, 0x73, 0x64, 0x6b, 0x76, 0x65, 0x72,
+    0x00, 0x00, 0x00, 0x33, 0x32, 0x30, 0x2e, 0x30, 0x2e, 0x30, 0x2d, 0x72, 0x63, 0x32, 0x23, 0x37,
+    0x63, 0x31, 0x35, 0x34, 0x62, 0x34, 0x66, 0x65, 0x36, 0x61, 0x33, 0x37, 0x64, 0x37, 0x63, 0x61,
+    0x37, 0x31, 0x37, 0x37, 0x33, 0x34, 0x32, 0x64, 0x65, 0x64, 0x62, 0x36, 0x39, 0x66, 0x33, 0x31,
+    0x30, 0x38, 0x30, 0x39, 0x35, 0x65, 0x66, 0x00,
+];
 
 fn setup(global_multiplier: u32, credit_rate: i128) -> TestEnv {
     setup_with_lock_period(global_multiplier, credit_rate, 0)
@@ -127,6 +171,106 @@ fn test_stake_uninitialized_returns_not_initialized() {
 fn test_pause_uninitialized_returns_not_initialized() {
     let (_env, client, _user) = setup_uninitialized();
     match client.try_pause() {
+        Err(Ok(PoolError::NotInitialized)) => {}
+        _ => panic!("expected PoolError::NotInitialized"),
+    }
+}
+
+#[test]
+fn test_schema_version_defaults_to_current_release() {
+    let t = setup(2, 1);
+    assert_eq!(t.client.schema_version(), SCHEMA_VERSION);
+}
+
+#[test]
+fn test_migrate_placeholder_requires_admin_and_stamps_current_version() {
+    let t = setup(2, 1);
+    assert_eq!(t.client.migrate(), SCHEMA_VERSION);
+    assert_eq!(t.client.schema_version(), SCHEMA_VERSION);
+}
+
+#[test]
+fn test_upgrade_preserves_stake_storage_and_enables_new_wasm() {
+    let t = setup(2, 1);
+    t.client.stake(&t.user, &1_000);
+    advance_ledgers(&t.env, 10);
+
+    let before = t.client.get_stake(&t.user).expect("stake must exist");
+    let new_wasm_hash = upload_upgrade_target_wasm(&t.env);
+
+    t.client.upgrade(&new_wasm_hash);
+
+    assert_eq!(
+        t.env.events().all(),
+        soroban_sdk::vec![
+            &t.env,
+            (
+                t.contract_id.clone(),
+                soroban_sdk::vec![
+                    &t.env,
+                    soroban_sdk::symbol_short!("pool").into_val(&t.env),
+                    soroban_sdk::symbol_short!("upgraded").into_val(&t.env)
+                ],
+                new_wasm_hash.clone().into_val(&t.env),
+            )
+        ]
+    );
+
+    let stored = t.env.as_contract(&t.contract_id, || {
+        t.env
+            .storage()
+            .persistent()
+            .get::<DataKey, UserStake>(&DataKey::UserStake(t.user.clone()))
+    });
+    let stored = stored.expect("stake storage must survive wasm upgrade");
+    assert_eq!(stored.amount, before.amount);
+    assert_eq!(stored.start_ledger, before.start_ledger);
+    assert_eq!(stored.credits_banked, before.credits_banked);
+    assert_eq!(stored.credit_rate, before.credit_rate);
+
+    let args: soroban_sdk::Vec<Val> =
+        soroban_sdk::vec![&t.env, 2i32.into_val(&t.env), 40i32.into_val(&t.env)];
+    let sum: i32 = t
+        .env
+        .invoke_contract(&t.contract_id, &Symbol::new(&t.env, "add"), args);
+    assert_eq!(sum, 42);
+}
+
+#[test]
+fn test_upgrade_requires_admin_auth() {
+    let (env, contract_id, client, admin, user) = setup_without_mocked_auth();
+    let new_wasm_hash = upload_upgrade_target_wasm(&env);
+
+    let result = client
+        .mock_auths(&[MockAuth {
+            address: &user,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "upgrade",
+                args: (&new_wasm_hash,).into_val(&env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_upgrade(&new_wasm_hash);
+
+    assert!(result.is_err(), "non-admin upgrade must be rejected");
+    assert_eq!(client.admin(), admin);
+}
+
+#[test]
+fn test_admin_uninitialized_returns_not_initialized() {
+    let (_env, client, _user) = setup_uninitialized();
+    match client.try_admin() {
+        Err(Ok(PoolError::NotInitialized)) => {}
+        _ => panic!("expected PoolError::NotInitialized"),
+    }
+}
+
+#[test]
+fn test_transfer_admin_uninitialized_returns_not_initialized() {
+    let (env, client, _user) = setup_uninitialized();
+    let new_admin = Address::generate(&env);
+    match client.try_transfer_admin(&new_admin) {
         Err(Ok(PoolError::NotInitialized)) => {}
         _ => panic!("expected PoolError::NotInitialized"),
     }
@@ -274,6 +418,144 @@ fn test_admin_sets_global_multiplier() {
 }
 
 #[test]
+fn test_set_credit_rate_updates_public_getters() {
+    let t = setup_with_lock_period(2, 1, 12);
+    t.client.set_credit_rate(&4i128);
+    assert_eq!(
+        t.env.events().all(),
+        soroban_sdk::vec![
+            &t.env,
+            (
+                t.contract_id.clone(),
+                soroban_sdk::vec![
+                    &t.env,
+                    soroban_sdk::symbol_short!("pool").into_val(&t.env),
+                    soroban_sdk::symbol_short!("rate_set").into_val(&t.env)
+                ],
+                (1i128, 4i128).into_val(&t.env),
+            )
+        ]
+    );
+
+    t.client.set_min_lock_period(&25u32);
+    assert_eq!(
+        t.env.events().all(),
+        soroban_sdk::vec![
+            &t.env,
+            (
+                t.contract_id.clone(),
+                soroban_sdk::vec![
+                    &t.env,
+                    soroban_sdk::symbol_short!("pool").into_val(&t.env),
+                    soroban_sdk::symbol_short!("lock_set").into_val(&t.env)
+                ],
+                (12u32, 25u32).into_val(&t.env),
+            )
+        ]
+    );
+
+    assert_eq!(t.client.credit_rate(), 4);
+    assert_eq!(t.client.get_credit_rate(), 4);
+    assert_eq!(t.client.min_lock_period(), 25);
+    assert_eq!(t.client.get_min_lock_period(), 25);
+}
+
+#[test]
+fn test_set_credit_rate_rejects_zero_with_typed_error() {
+    let t = setup(2, 1);
+    let result = t.client.try_set_credit_rate(&0i128);
+    assert!(matches!(result, Err(Ok(PoolError::InvalidCreditRate))));
+}
+
+// ── #89: value ceilings on set_global_multiplier / set_credit_rate ──────────
+
+#[test]
+fn test_set_credit_rate_rejects_above_ceiling() {
+    let t = setup(2, 1);
+    let result = t.client.try_set_credit_rate(&(MAX_CREDIT_RATE + 1));
+    assert!(matches!(result, Err(Ok(PoolError::InvalidCreditRate))));
+}
+
+#[test]
+fn test_set_credit_rate_accepts_exactly_the_ceiling() {
+    let t = setup(2, 1);
+    t.client.set_credit_rate(&MAX_CREDIT_RATE);
+    assert_eq!(t.client.credit_rate(), MAX_CREDIT_RATE);
+}
+
+#[test]
+fn test_set_credit_rate_requires_admin_auth() {
+    let (env, contract_id, client, _admin, user) = setup_without_mocked_auth();
+
+    let result = client
+        .mock_auths(&[MockAuth {
+            address: &user,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "set_credit_rate",
+                args: (&5i128,).into_val(&env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_set_credit_rate(&5i128);
+
+    assert!(
+        result.is_err(),
+        "non-admin set_credit_rate must be rejected"
+    );
+}
+
+#[test]
+fn test_set_min_lock_period_requires_admin_auth() {
+    let (env, contract_id, client, _admin, user) = setup_without_mocked_auth();
+
+    let result = client
+        .mock_auths(&[MockAuth {
+            address: &user,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "set_min_lock_period",
+                args: (&9u32,).into_val(&env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_set_min_lock_period(&9u32);
+
+    assert!(
+        result.is_err(),
+        "non-admin set_min_lock_period must be rejected"
+    );
+}
+
+#[test]
+fn test_credit_rate_change_does_not_retroactively_alter_staked_credits() {
+    let t = setup(2, 1);
+    t.client.stake(&t.user, &1_000);
+    advance_ledgers(&t.env, 10);
+
+    t.client.set_credit_rate(&3i128);
+    assert_eq!(t.client.get_credits(&t.user), 10_000);
+
+    t.client.stake(&t.user, &1); // checkpoints under the old rate
+    advance_ledgers(&t.env, 5);
+    assert_eq!(t.client.get_credits(&t.user), 25_015);
+}
+
+#[test]
+fn test_credit_rate_change_does_not_retroactively_alter_locked_credits() {
+    let t = setup(1, 1);
+    t.client.lock_assets(&t.user, &1_000);
+    advance_ledgers(&t.env, 10);
+
+    t.client.set_credit_rate(&3i128);
+    assert_eq!(t.client.calculate_credits(&t.user), 10_000);
+
+    t.client.lock_assets(&t.user, &1); // checkpoints under the old rate
+    advance_ledgers(&t.env, 5);
+    assert_eq!(t.client.calculate_credits(&t.user), 25_015);
+}
+
+#[test]
 fn test_admin_multiplier_change_applies_from_next_checkpoint() {
     // 10 ledgers at 50% boost @ 2×, then user checkpoints (banking 2× credits),
     // then admin bumps to 3×, then 10 more ledgers at 50% @ 3×.
@@ -294,10 +576,130 @@ fn test_admin_multiplier_change_applies_from_next_checkpoint() {
 }
 
 #[test]
-#[should_panic(expected = "multiplier must be >= 1")]
 fn test_admin_multiplier_rejects_zero() {
+    // Updated for #89: the old bare `assert!` (matched via `should_panic`)
+    // was replaced with a typed `PoolError::InvalidGlobalMultiplier` return,
+    // so this now asserts via `try_set_global_multiplier` like the rest of
+    // the typed-error suite instead of panic-message matching.
     let t = setup(2, 1);
-    t.client.set_global_multiplier(&0u32);
+    let result = t.client.try_set_global_multiplier(&0u32);
+    assert!(matches!(
+        result,
+        Err(Ok(PoolError::InvalidGlobalMultiplier))
+    ));
+}
+
+#[test]
+fn test_set_global_multiplier_rejects_above_ceiling() {
+    let t = setup(2, 1);
+    let result = t
+        .client
+        .try_set_global_multiplier(&(MAX_GLOBAL_MULTIPLIER + 1));
+    assert!(matches!(
+        result,
+        Err(Ok(PoolError::InvalidGlobalMultiplier))
+    ));
+}
+
+#[test]
+fn test_set_global_multiplier_accepts_exactly_the_ceiling() {
+    let t = setup(2, 1);
+    t.client.set_global_multiplier(&MAX_GLOBAL_MULTIPLIER);
+    t.client.stake(&t.user, &1_000);
+    t.client.set_boost(&t.user, &50u32);
+    let cfg = t.client.get_boost_config(&t.user).unwrap();
+    assert_eq!(cfg.multiplier, MAX_GLOBAL_MULTIPLIER);
+}
+
+#[test]
+fn test_initialize_rejects_global_multiplier_above_ceiling() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let asset = env.register_stellar_asset_contract_v2(token_admin);
+    let contract_id = env.register(FarmingPool, ());
+    let client = FarmingPoolClient::new(&env, &contract_id);
+
+    let result = client.try_initialize(
+        &admin,
+        &asset.address(),
+        &(MAX_GLOBAL_MULTIPLIER + 1),
+        &1i128,
+        &0u32,
+    );
+    assert!(matches!(
+        result,
+        Err(Ok(PoolError::InvalidGlobalMultiplier))
+    ));
+}
+
+#[test]
+fn test_initialize_rejects_credit_rate_above_ceiling() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let asset = env.register_stellar_asset_contract_v2(token_admin);
+    let contract_id = env.register(FarmingPool, ());
+    let client = FarmingPoolClient::new(&env, &contract_id);
+
+    let result = client.try_initialize(
+        &admin,
+        &asset.address(),
+        &2u32,
+        &(MAX_CREDIT_RATE + 1),
+        &0u32,
+    );
+    assert!(matches!(result, Err(Ok(PoolError::InvalidCreditRate))));
+}
+
+/// Ties the #89 fix to its own derivation: at both ceilings simultaneously
+/// (`MAX_GLOBAL_MULTIPLIER`, `MAX_CREDIT_RATE`), full boost allocation (100%,
+/// `compute_total_stake`'s worst case), the derivation's `amount_max`, and
+/// its `elapsed_max` (~10 years of ledgers), the boost-path credit preview
+/// (`get_credits`, which exercises the exact `compute_total_stake` /
+/// `compute_credits` chain the derivation bounds) must not overflow/panic and
+/// must equal the worst-case product computed by the same formula. This is a
+/// single deterministic boundary point, not a fuzz/property suite (#75/#76
+/// remain out of scope).
+#[test]
+fn test_compute_credits_no_overflow_at_ceilings() {
+    // Matches the doc comment on MAX_GLOBAL_MULTIPLIER/MAX_CREDIT_RATE.
+    const AMOUNT_MAX: i128 = 1_000_000_000_000_000_000; // 10^18
+    const ELAPSED_MAX: u32 = 63_072_000; // ~10 years at 5s/ledger
+
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    let token_admin = Address::generate(&env);
+    let asset = env.register_stellar_asset_contract_v2(token_admin);
+    let token_sac = StellarAssetClient::new(&env, &asset.address());
+    token_sac.mint(&user, &AMOUNT_MAX);
+
+    let contract_id = env.register(FarmingPool, ());
+    let client = FarmingPoolClient::new(&env, &contract_id);
+    client.initialize(
+        &admin,
+        &asset.address(),
+        &MAX_GLOBAL_MULTIPLIER,
+        &MAX_CREDIT_RATE,
+        &0u32,
+    );
+
+    client.stake(&user, &AMOUNT_MAX);
+    client.set_boost(&user, &100u32);
+    advance_ledgers(&env, ELAPSED_MAX);
+
+    // No panic/overflow trap here is itself the assertion; also check the
+    // value is exactly the worst-case product the derivation computed.
+    let credits = client.get_credits(&user);
+    let expected =
+        AMOUNT_MAX * MAX_GLOBAL_MULTIPLIER as i128 * MAX_CREDIT_RATE * ELAPSED_MAX as i128;
+    assert_eq!(credits, expected);
 }
 
 #[test]
@@ -467,6 +869,7 @@ fn test_lock_assets_creates_position() {
     assert_eq!(pos.amount, 500);
     assert_eq!(pos.total_credits, 0);
     assert_eq!(t.token.balance(&t.user), initial_balance - 500);
+    assert_eq!(t.token.balance(&t.contract_id), 500);
 }
 
 #[test]
@@ -484,6 +887,18 @@ fn test_lock_assets_additional_lock_checkpoints_credits() {
         .expect("position should exist");
     assert_eq!(pos.amount, 1_500);
     assert_eq!(pos.total_credits, 10_000); // 1000 * 10
+}
+
+#[test]
+fn test_multiple_locks_credit_only_new_amount_for_later_ledgers() {
+    let t = setup(1, 1);
+    t.client.lock_assets(&t.user, &100);
+    advance_ledgers(&t.env, 1_000);
+
+    t.client.lock_assets(&t.user, &100);
+    advance_ledgers(&t.env, 1_000);
+
+    assert_eq!(t.client.calculate_credits(&t.user), 300_000);
 }
 
 #[test]
@@ -512,9 +927,21 @@ fn test_lock_assets_rejects_insufficient_balance() {
 fn test_lock_assets_emits_event() {
     let t = setup(1, 1);
     t.client.lock_assets(&t.user, &1_000);
-    assert!(
-        !t.env.events().all().events().is_empty(),
-        "lock event not emitted"
+
+    assert_eq!(
+        t.env.events().all().filter_by_contract(&t.contract_id),
+        soroban_sdk::vec![
+            &t.env,
+            (
+                t.contract_id.clone(),
+                soroban_sdk::vec![
+                    &t.env,
+                    soroban_sdk::symbol_short!("pool").into_val(&t.env),
+                    soroban_sdk::symbol_short!("locked").into_val(&t.env)
+                ],
+                (t.user.clone(), 1_000i128).into_val(&t.env),
+            )
+        ]
     );
 }
 
@@ -531,6 +958,7 @@ fn test_unlock_assets_full_returns_tokens_and_credits() {
 
     // All tokens returned, position removed, credits = 1000 * 10.
     assert_eq!(t.token.balance(&t.user), initial_balance);
+    assert_eq!(t.token.balance(&t.contract_id), 0);
     assert!(t.client.get_user_position(&t.user).is_none());
     assert_eq!(t.client.calculate_credits(&t.user), 0);
 }
@@ -539,19 +967,20 @@ fn test_unlock_assets_full_returns_tokens_and_credits() {
 fn test_unlock_assets_partial_keeps_remaining_position() {
     let t = setup(1, 1);
     let initial_balance = t.token.balance(&t.user);
-    t.client.lock_assets(&t.user, &1_000);
+    t.client.lock_assets(&t.user, &500);
     advance_ledgers(&t.env, 10);
 
-    t.client.unlock_assets(&t.user, &400); // partial unlock
+    t.client.unlock_assets(&t.user, &200); // partial unlock
 
     let pos = t
         .client
         .get_user_position(&t.user)
         .expect("position should still exist");
-    assert_eq!(pos.amount, 600);
-    // 1000 * 10 = 10000 credits banked during checkpoint
-    assert_eq!(pos.total_credits, 10_000);
-    assert_eq!(t.token.balance(&t.user), initial_balance - 600);
+    assert_eq!(pos.amount, 300);
+    // 500 * 10 = 5000 credits banked during checkpoint.
+    assert_eq!(pos.total_credits, 5_000);
+    assert_eq!(t.token.balance(&t.user), initial_balance - 300);
+    assert_eq!(t.token.balance(&t.contract_id), 300);
 }
 
 #[test]
@@ -580,9 +1009,21 @@ fn test_unlock_assets_emits_event() {
     t.client.lock_assets(&t.user, &1_000);
     advance_ledgers(&t.env, 5);
     t.client.unlock_assets(&t.user, &1_000);
-    assert!(
-        !t.env.events().all().events().is_empty(),
-        "unlock event not emitted"
+
+    assert_eq!(
+        t.env.events().all().filter_by_contract(&t.contract_id),
+        soroban_sdk::vec![
+            &t.env,
+            (
+                t.contract_id.clone(),
+                soroban_sdk::vec![
+                    &t.env,
+                    soroban_sdk::symbol_short!("pool").into_val(&t.env),
+                    soroban_sdk::symbol_short!("unlocked").into_val(&t.env)
+                ],
+                (t.user.clone(), 1_000i128, 5_000i128).into_val(&t.env),
+            )
+        ]
     );
 }
 
@@ -618,6 +1059,32 @@ fn test_unlock_allowed_well_past_min_lock_period() {
 }
 
 // ── calculate_credits tests ───────────────────────────────────────────────────
+
+#[test]
+fn test_min_lock_period_change_does_not_affect_existing_position_unlock_ledger() {
+    let t = setup_with_lock_period(1, 1, 100);
+    t.client.lock_assets(&t.user, &1_000);
+    let position = t.client.get_user_position(&t.user).unwrap();
+    assert_eq!(position.unlock_ledger, position.lock_ledger + 100);
+
+    t.client.set_min_lock_period(&5u32);
+    advance_ledgers(&t.env, 50);
+    assert!(t.client.try_unlock_assets(&t.user, &1_000).is_err());
+
+    advance_ledgers(&t.env, 50);
+    t.client.unlock_assets(&t.user, &1_000);
+    assert!(t.client.get_user_position(&t.user).is_none());
+}
+
+#[test]
+fn test_new_positions_use_updated_min_lock_period() {
+    let t = setup_with_lock_period(1, 1, 100);
+    t.client.set_min_lock_period(&5u32);
+    t.client.lock_assets(&t.user, &1_000);
+
+    let position = t.client.get_user_position(&t.user).unwrap();
+    assert_eq!(position.unlock_ledger, position.lock_ledger + 5);
+}
 
 #[test]
 fn test_calculate_credits_zero_without_position() {
@@ -675,8 +1142,10 @@ fn test_get_user_position_returns_correct_fields() {
     let pos = t.client.get_user_position(&t.user).unwrap();
     assert_eq!(pos.amount, 750);
     assert_eq!(pos.lock_ledger, start);
+    assert_eq!(pos.unlock_ledger, start);
     assert_eq!(pos.checkpoint_ledger, start);
     assert_eq!(pos.total_credits, 0);
+    assert_eq!(pos.credit_rate, 1);
 }
 
 #[test]
@@ -701,7 +1170,11 @@ fn test_pause_blocks_lock_assets() {
     let t = setup(1, 1);
     t.client.pause();
     assert!(t.client.is_paused());
-    assert!(t.client.try_lock_assets(&t.user, &100i128).is_err());
+
+    match t.client.try_lock_assets(&t.user, &100i128) {
+        Err(Ok(PoolError::Paused)) => {}
+        other => panic!("expected PoolError::Paused, got: {:?}", other),
+    }
 }
 
 #[test]
@@ -709,7 +1182,11 @@ fn test_pause_blocks_unlock_assets() {
     let t = setup(1, 1);
     t.client.lock_assets(&t.user, &1_000);
     t.client.pause();
-    assert!(t.client.try_unlock_assets(&t.user, &1_000).is_err());
+
+    match t.client.try_unlock_assets(&t.user, &1_000) {
+        Err(Ok(PoolError::Paused)) => {}
+        other => panic!("expected PoolError::Paused, got: {:?}", other),
+    }
 }
 
 #[test]
@@ -748,7 +1225,11 @@ fn test_unpause_emits_event() {
 fn test_pause_blocks_stake() {
     let t = setup(1, 1);
     t.client.pause();
-    assert!(t.client.try_stake(&t.user, &100i128).is_err());
+
+    match t.client.try_stake(&t.user, &100i128) {
+        Err(Ok(PoolError::Paused)) => {}
+        other => panic!("expected PoolError::Paused, got: {:?}", other),
+    }
 }
 
 #[test]
@@ -869,8 +1350,14 @@ fn test_emergency_withdraw_while_paused() {
     // 600 locked + 400 staked = 1_000 total tokens returned.
     assert_eq!(returned, 1_000);
     assert_eq!(t.token.balance(&t.user), initial_balance);
-    assert!(t.client.get_user_position(&t.user).is_none(), "position should be cleared");
-    assert!(t.client.get_stake(&t.user).is_none(), "stake should be cleared");
+    assert!(
+        t.client.get_user_position(&t.user).is_none(),
+        "position should be cleared"
+    );
+    assert!(
+        t.client.get_stake(&t.user).is_none(),
+        "stake should be cleared"
+    );
     // 5_000 (lock credits) + 3_000 (stake credits) preserved.
     assert_eq!(t.client.get_banked_credits(&t.user), 8_000);
 }
@@ -921,4 +1408,89 @@ fn test_set_min_stake_amount() {
     t.client.set_min_stake_amount(&amount);
     let min_stake = t.client.get_min_stake_amount();
     assert_eq!(min_stake, amount);
+}
+// ── lock_assets checks-effects-interactions (#69) ─────────────────────────────
+//
+// `stake_token` is an admin-supplied address, not necessarily a trusted
+// Stellar Asset Contract — a non-standard `transfer` implementation could
+// attempt to call back into FarmingPool before returning. Empirically
+// (verified against this project's soroban-env-host 25.0.1), Soroban's host
+// already rejects same-contract reentrancy outright — `ContractReentryMode`
+// defaults to `Prohibited`, so any attempt to call back into a contract
+// that's already on the invocation's call stack traps with "Contract
+// re-entry is not allowed" *before* any of our code (fixed or not) runs.
+// These tests exercise both realistic reentrant-token shapes and confirm
+// the CEI reordering fix doesn't change correct-path behavior.
+
+use crate::mock_reentrant_token::{
+    MockNaiveReentrantToken, MockNaiveReentrantTokenClient, MockReentrantToken,
+    MockReentrantTokenClient,
+};
+
+extern crate std;
+
+#[test]
+fn test_lock_assets_reentrant_transfer_is_rejected_and_final_state_is_correct() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    let farming_pool_id = env.register(FarmingPool, ());
+    let client = FarmingPoolClient::new(&env, &farming_pool_id);
+
+    let token_id = env.register(MockReentrantToken, ());
+    let token_client = MockReentrantTokenClient::new(&env, &token_id);
+    token_client.configure(&farming_pool_id, &user);
+
+    client.initialize(&admin, &token_id, &2u32, &100i128, &0u32);
+
+    // Succeeds fully: the mock token catches the rejected reentry gracefully
+    // (via try_invoke_contract) rather than trapping the whole call.
+    client.lock_assets(&user, &500i128);
+
+    // The reentrant get_user_position call — attempted mid-transfer, before
+    // lock_assets would have returned — was rejected by the host.
+    assert!(token_client.reentry_was_rejected());
+
+    // And with set_position now happening before the transfer, the position
+    // this call was computing is correctly persisted once it completes.
+    let position = client.get_user_position(&user).unwrap();
+    assert_eq!(position.amount, 500);
+}
+
+#[test]
+fn test_lock_assets_reverts_entirely_if_stake_token_naively_reenters() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    let farming_pool_id = env.register(FarmingPool, ());
+    let client = FarmingPoolClient::new(&env, &farming_pool_id);
+
+    let token_id = env.register(MockNaiveReentrantToken, ());
+    let token_client = MockNaiveReentrantTokenClient::new(&env, &token_id);
+    token_client.configure(&farming_pool_id, &user);
+
+    client.initialize(&admin, &token_id, &2u32, &100i128, &0u32);
+
+    // The naive mock token doesn't catch the host's rejection, so the
+    // reentrant call traps — and with it, the entire lock_assets invocation,
+    // including our set_position write. Assert the whole call aborts rather
+    // than silently succeeding or leaving a partial state behind.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.lock_assets(&user, &500i128);
+    }));
+    assert!(
+        result.is_err(),
+        "lock_assets should trap when stake_token attempts reentrancy"
+    );
+
+    // Soroban's per-invocation atomicity means the trap rolled back
+    // everything, including the effects-first set_position write — no
+    // partial position was left behind.
+    assert!(client.get_user_position(&user).is_none());
 }

@@ -7,10 +7,19 @@ use soroban_sdk::{contracterror, contracttype, Address};
 pub enum PoolError {
     AlreadyInitialized = 1,
     NotInitialized = 2,
+    /// Returned by `emergency_withdraw` when the pool is not currently paused.
+    NotPaused     = 13,
+    /// Returned by `emergency_withdraw` when the user has no stake or locked position.
+    NoActiveStake = 14,
+    BelowMinimumStake = 15
     InvalidCreditRate = 3,
     NotPaused = 13,
+    Paused = 20,
     NoActiveStake = 14,
     NotWhitelisted = 15,
+    /// `global_multiplier` was 0 or exceeded `MAX_GLOBAL_MULTIPLIER`. See #89.
+    InvalidGlobalMultiplier = 15,
+
 }
 
 /// Per-user boost configuration returned by `get_boost_config`.
@@ -54,6 +63,7 @@ pub enum DataKey {
     CreditRate,
     StakeToken,
     MinLockPeriod,
+    SchemaVersion,
     Paused,
     UserBoost(Address),
     UserStake(Address),
@@ -62,4 +72,5 @@ pub enum DataKey {
     // Whitelist keys
     WhitelistEnabled,
     Whitelisted(Address),
+    MinStakeAmount,
 }

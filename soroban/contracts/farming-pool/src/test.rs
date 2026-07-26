@@ -465,6 +465,22 @@ fn test_set_credit_rate_rejects_zero_with_typed_error() {
     assert!(matches!(result, Err(Ok(PoolError::InvalidCreditRate))));
 }
 
+// ── #89: value ceilings on set_global_multiplier / set_credit_rate ──────────
+
+#[test]
+fn test_set_credit_rate_rejects_above_ceiling() {
+    let t = setup(2, 1);
+    let result = t.client.try_set_credit_rate(&(MAX_CREDIT_RATE + 1));
+    assert!(matches!(result, Err(Ok(PoolError::InvalidCreditRate))));
+}
+
+#[test]
+fn test_set_credit_rate_accepts_exactly_the_ceiling() {
+    let t = setup(2, 1);
+    t.client.set_credit_rate(&MAX_CREDIT_RATE);
+    assert_eq!(t.client.credit_rate(), MAX_CREDIT_RATE);
+}
+
 #[test]
 fn test_set_credit_rate_requires_admin_auth() {
     let (env, contract_id, client, _admin, user) = setup_without_mocked_auth();
@@ -558,10 +574,130 @@ fn test_admin_multiplier_change_applies_from_next_checkpoint() {
 }
 
 #[test]
-#[should_panic(expected = "multiplier must be >= 1")]
 fn test_admin_multiplier_rejects_zero() {
+    // Updated for #89: the old bare `assert!` (matched via `should_panic`)
+    // was replaced with a typed `PoolError::InvalidGlobalMultiplier` return,
+    // so this now asserts via `try_set_global_multiplier` like the rest of
+    // the typed-error suite instead of panic-message matching.
     let t = setup(2, 1);
-    t.client.set_global_multiplier(&0u32);
+    let result = t.client.try_set_global_multiplier(&0u32);
+    assert!(matches!(
+        result,
+        Err(Ok(PoolError::InvalidGlobalMultiplier))
+    ));
+}
+
+#[test]
+fn test_set_global_multiplier_rejects_above_ceiling() {
+    let t = setup(2, 1);
+    let result = t
+        .client
+        .try_set_global_multiplier(&(MAX_GLOBAL_MULTIPLIER + 1));
+    assert!(matches!(
+        result,
+        Err(Ok(PoolError::InvalidGlobalMultiplier))
+    ));
+}
+
+#[test]
+fn test_set_global_multiplier_accepts_exactly_the_ceiling() {
+    let t = setup(2, 1);
+    t.client.set_global_multiplier(&MAX_GLOBAL_MULTIPLIER);
+    t.client.stake(&t.user, &1_000);
+    t.client.set_boost(&t.user, &50u32);
+    let cfg = t.client.get_boost_config(&t.user).unwrap();
+    assert_eq!(cfg.multiplier, MAX_GLOBAL_MULTIPLIER);
+}
+
+#[test]
+fn test_initialize_rejects_global_multiplier_above_ceiling() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let asset = env.register_stellar_asset_contract_v2(token_admin);
+    let contract_id = env.register(FarmingPool, ());
+    let client = FarmingPoolClient::new(&env, &contract_id);
+
+    let result = client.try_initialize(
+        &admin,
+        &asset.address(),
+        &(MAX_GLOBAL_MULTIPLIER + 1),
+        &1i128,
+        &0u32,
+    );
+    assert!(matches!(
+        result,
+        Err(Ok(PoolError::InvalidGlobalMultiplier))
+    ));
+}
+
+#[test]
+fn test_initialize_rejects_credit_rate_above_ceiling() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let asset = env.register_stellar_asset_contract_v2(token_admin);
+    let contract_id = env.register(FarmingPool, ());
+    let client = FarmingPoolClient::new(&env, &contract_id);
+
+    let result = client.try_initialize(
+        &admin,
+        &asset.address(),
+        &2u32,
+        &(MAX_CREDIT_RATE + 1),
+        &0u32,
+    );
+    assert!(matches!(result, Err(Ok(PoolError::InvalidCreditRate))));
+}
+
+/// Ties the #89 fix to its own derivation: at both ceilings simultaneously
+/// (`MAX_GLOBAL_MULTIPLIER`, `MAX_CREDIT_RATE`), full boost allocation (100%,
+/// `compute_total_stake`'s worst case), the derivation's `amount_max`, and
+/// its `elapsed_max` (~10 years of ledgers), the boost-path credit preview
+/// (`get_credits`, which exercises the exact `compute_total_stake` /
+/// `compute_credits` chain the derivation bounds) must not overflow/panic and
+/// must equal the worst-case product computed by the same formula. This is a
+/// single deterministic boundary point, not a fuzz/property suite (#75/#76
+/// remain out of scope).
+#[test]
+fn test_compute_credits_no_overflow_at_ceilings() {
+    // Matches the doc comment on MAX_GLOBAL_MULTIPLIER/MAX_CREDIT_RATE.
+    const AMOUNT_MAX: i128 = 1_000_000_000_000_000_000; // 10^18
+    const ELAPSED_MAX: u32 = 63_072_000; // ~10 years at 5s/ledger
+
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    let token_admin = Address::generate(&env);
+    let asset = env.register_stellar_asset_contract_v2(token_admin);
+    let token_sac = StellarAssetClient::new(&env, &asset.address());
+    token_sac.mint(&user, &AMOUNT_MAX);
+
+    let contract_id = env.register(FarmingPool, ());
+    let client = FarmingPoolClient::new(&env, &contract_id);
+    client.initialize(
+        &admin,
+        &asset.address(),
+        &MAX_GLOBAL_MULTIPLIER,
+        &MAX_CREDIT_RATE,
+        &0u32,
+    );
+
+    client.stake(&user, &AMOUNT_MAX);
+    client.set_boost(&user, &100u32);
+    advance_ledgers(&env, ELAPSED_MAX);
+
+    // No panic/overflow trap here is itself the assertion; also check the
+    // value is exactly the worst-case product the derivation computed.
+    let credits = client.get_credits(&user);
+    let expected =
+        AMOUNT_MAX * MAX_GLOBAL_MULTIPLIER as i128 * MAX_CREDIT_RATE * ELAPSED_MAX as i128;
+    assert_eq!(credits, expected);
 }
 
 #[test]
@@ -731,6 +867,7 @@ fn test_lock_assets_creates_position() {
     assert_eq!(pos.amount, 500);
     assert_eq!(pos.total_credits, 0);
     assert_eq!(t.token.balance(&t.user), initial_balance - 500);
+    assert_eq!(t.token.balance(&t.contract_id), 500);
 }
 
 #[test]
@@ -748,6 +885,18 @@ fn test_lock_assets_additional_lock_checkpoints_credits() {
         .expect("position should exist");
     assert_eq!(pos.amount, 1_500);
     assert_eq!(pos.total_credits, 10_000); // 1000 * 10
+}
+
+#[test]
+fn test_multiple_locks_credit_only_new_amount_for_later_ledgers() {
+    let t = setup(1, 1);
+    t.client.lock_assets(&t.user, &100);
+    advance_ledgers(&t.env, 1_000);
+
+    t.client.lock_assets(&t.user, &100);
+    advance_ledgers(&t.env, 1_000);
+
+    assert_eq!(t.client.calculate_credits(&t.user), 300_000);
 }
 
 #[test]
@@ -776,9 +925,21 @@ fn test_lock_assets_rejects_insufficient_balance() {
 fn test_lock_assets_emits_event() {
     let t = setup(1, 1);
     t.client.lock_assets(&t.user, &1_000);
-    assert!(
-        !t.env.events().all().events().is_empty(),
-        "lock event not emitted"
+
+    assert_eq!(
+        t.env.events().all().filter_by_contract(&t.contract_id),
+        soroban_sdk::vec![
+            &t.env,
+            (
+                t.contract_id.clone(),
+                soroban_sdk::vec![
+                    &t.env,
+                    soroban_sdk::symbol_short!("pool").into_val(&t.env),
+                    soroban_sdk::symbol_short!("locked").into_val(&t.env)
+                ],
+                (t.user.clone(), 1_000i128).into_val(&t.env),
+            )
+        ]
     );
 }
 
@@ -795,6 +956,7 @@ fn test_unlock_assets_full_returns_tokens_and_credits() {
 
     // All tokens returned, position removed, credits = 1000 * 10.
     assert_eq!(t.token.balance(&t.user), initial_balance);
+    assert_eq!(t.token.balance(&t.contract_id), 0);
     assert!(t.client.get_user_position(&t.user).is_none());
     assert_eq!(t.client.calculate_credits(&t.user), 0);
 }
@@ -803,19 +965,20 @@ fn test_unlock_assets_full_returns_tokens_and_credits() {
 fn test_unlock_assets_partial_keeps_remaining_position() {
     let t = setup(1, 1);
     let initial_balance = t.token.balance(&t.user);
-    t.client.lock_assets(&t.user, &1_000);
+    t.client.lock_assets(&t.user, &500);
     advance_ledgers(&t.env, 10);
 
-    t.client.unlock_assets(&t.user, &400); // partial unlock
+    t.client.unlock_assets(&t.user, &200); // partial unlock
 
     let pos = t
         .client
         .get_user_position(&t.user)
         .expect("position should still exist");
-    assert_eq!(pos.amount, 600);
-    // 1000 * 10 = 10000 credits banked during checkpoint
-    assert_eq!(pos.total_credits, 10_000);
-    assert_eq!(t.token.balance(&t.user), initial_balance - 600);
+    assert_eq!(pos.amount, 300);
+    // 500 * 10 = 5000 credits banked during checkpoint.
+    assert_eq!(pos.total_credits, 5_000);
+    assert_eq!(t.token.balance(&t.user), initial_balance - 300);
+    assert_eq!(t.token.balance(&t.contract_id), 300);
 }
 
 #[test]
@@ -844,9 +1007,21 @@ fn test_unlock_assets_emits_event() {
     t.client.lock_assets(&t.user, &1_000);
     advance_ledgers(&t.env, 5);
     t.client.unlock_assets(&t.user, &1_000);
-    assert!(
-        !t.env.events().all().events().is_empty(),
-        "unlock event not emitted"
+
+    assert_eq!(
+        t.env.events().all().filter_by_contract(&t.contract_id),
+        soroban_sdk::vec![
+            &t.env,
+            (
+                t.contract_id.clone(),
+                soroban_sdk::vec![
+                    &t.env,
+                    soroban_sdk::symbol_short!("pool").into_val(&t.env),
+                    soroban_sdk::symbol_short!("unlocked").into_val(&t.env)
+                ],
+                (t.user.clone(), 1_000i128, 5_000i128).into_val(&t.env),
+            )
+        ]
     );
 }
 

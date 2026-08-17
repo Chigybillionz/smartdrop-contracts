@@ -8,8 +8,15 @@ pub enum PoolError {
     AlreadyInitialized = 1,
     NotInitialized = 2,
     InvalidCreditRate = 3,
-    NotPaused = 13,
-    NoActiveStake = 14,
+    /// `global_multiplier` was 0 or exceeded `MAX_GLOBAL_MULTIPLIER`. See #89.
+    InvalidGlobalMultiplier = 4,
+    NotWhitelisted = 5,
+    BelowMinimumStake = 6,
+    /// Returned by `emergency_withdraw` when the pool is not currently paused.
+    NotPaused = 7,
+    /// Returned by `emergency_withdraw` when the user has no stake or locked position.
+    NoActiveStake = 8,
+    Paused = 9,
 }
 
 /// Per-user boost configuration returned by `get_boost_config`.
@@ -53,9 +60,14 @@ pub enum DataKey {
     CreditRate,
     StakeToken,
     MinLockPeriod,
+    SchemaVersion,
     Paused,
     UserBoost(Address),
     UserStake(Address),
     UserPosition(Address),
     BankedCredits(Address),
+    // Whitelist keys
+    WhitelistEnabled,
+    Whitelisted(Address),
+    MinStakeAmount,
 }

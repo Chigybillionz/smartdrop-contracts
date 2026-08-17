@@ -55,7 +55,7 @@
           "function": {
             "contract_fn": {
               "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
-              "function_name": "stake",
+              "function_name": "lock_assets",
               "args": [
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
@@ -104,7 +104,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "u32": 50
+                  "u32": 100
                 }
               ]
             }
@@ -117,7 +117,7 @@
   ],
   "ledger": {
     "protocol_version": 25,
-    "sequence_number": 0,
+    "sequence_number": 10,
     "timestamp": 0,
     "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
     "base_reserve": 0,
@@ -245,7 +245,7 @@
               },
               "durability": "persistent",
               "val": {
-                "u32": 50
+                "u32": 100
               }
             }
           },
@@ -263,7 +263,7 @@
               "key": {
                 "vec": [
                   {
-                    "symbol": "UserStake"
+                    "symbol": "UserPosition"
                   },
                   {
                     "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
@@ -283,6 +283,14 @@
                   },
                   {
                     "key": {
+                      "symbol": "checkpoint_ledger"
+                    },
+                    "val": {
+                      "u32": 0
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "credit_rate"
                     },
                     "val": {
@@ -291,7 +299,15 @@
                   },
                   {
                     "key": {
-                      "symbol": "credits_banked"
+                      "symbol": "lock_ledger"
+                    },
+                    "val": {
+                      "u32": 0
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "total_credits"
                     },
                     "val": {
                       "i128": "0"
@@ -299,7 +315,7 @@
                   },
                   {
                     "key": {
-                      "symbol": "start_ledger"
+                      "symbol": "unlock_ledger"
                     },
                     "val": {
                       "u32": 0

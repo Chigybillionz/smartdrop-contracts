@@ -813,6 +813,11 @@ impl FarmingPool {
             &amount,
         );
 
+        env.events().publish(
+            (symbol_short!("pool"), symbol_short!("staked")),
+            (from, amount),
+        );
+
         Ok(())
     }
 
@@ -833,6 +838,11 @@ impl FarmingPool {
             &env.current_contract_address(),
             &from,
             &stake.amount,
+        );
+
+        env.events().publish(
+            (symbol_short!("pool"), symbol_short!("unstaked")),
+            (from.clone(), stake.amount, total_credits),
         );
 
         remove_user_stake(&env, &from);

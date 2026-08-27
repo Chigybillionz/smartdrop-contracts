@@ -187,6 +187,7 @@ impl VestingWallet {
             .instance()
             .set(&DataKey::Revocable, &revocable);
         env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::Funder, &admin);
         env.storage()
             .instance()
             .set(&DataKey::ReleasedAmount, &0i128);
@@ -243,11 +244,14 @@ impl VestingWallet {
         Ok(releasable)
     }
 
-    /// Admin: cancel the unvested portion and return it to admin.
+    /// Admin: cancel the unvested portion and return it to the original funder.
     ///
     /// Only callable when `revocable = true`. Tokens vested at the time of the
     /// call remain claimable by the beneficiary via `release()`. The unvested
-    /// remainder is transferred back to admin immediately.
+    /// remainder is transferred back to the funder (the address that funded the
+    /// vesting schedule at initialization), not the current admin. This ensures
+    /// that if admin rights were transferred via `transfer_admin`, the original
+    /// funder still receives their unvested tokens.
     pub fn revoke(env: Env) -> Result<(), VestingError> {
         require_initialized(&env)?;
         if !is_revocable(&env) {
@@ -261,6 +265,7 @@ impl VestingWallet {
         admin.require_auth();
         bump_instance(&env);
 
+        let funder: Address = env.storage().instance().get(&DataKey::Funder).unwrap();
         let vested = compute_vested(&env)?;
         let total = get_total_amount(&env);
         let unvested = total - vested;
@@ -274,7 +279,7 @@ impl VestingWallet {
         if unvested > 0 {
             token::TokenClient::new(&env, &get_token(&env)).transfer(
                 &env.current_contract_address(),
-                &admin,
+                &funder,
                 &unvested,
             );
         }
@@ -282,7 +287,7 @@ impl VestingWallet {
         #[allow(deprecated)]
         env.events().publish(
             (symbol_short!("vest"), symbol_short!("revoked")),
-            (admin, vested, unvested),
+            (funder, vested, unvested),
         );
 
         Ok(())

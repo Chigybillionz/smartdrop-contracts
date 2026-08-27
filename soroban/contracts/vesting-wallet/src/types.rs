@@ -30,6 +30,8 @@ pub enum DataKey {
     ReleasedAmount,
     /// Address authorised to revoke (admin).
     Admin,
+    /// Original address that funded the vesting schedule (set at init, never changed).
+    Funder,
     /// Whether the schedule can be revoked by admin.
     Revocable,
     /// Set to true once admin calls revoke().

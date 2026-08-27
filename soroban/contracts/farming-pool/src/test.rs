@@ -740,6 +740,121 @@ fn test_admin_getter_returns_current_admin() {
 }
 
 #[test]
+fn test_propose_admin_does_not_change_admin_until_accepted() {
+    let (env, contract_id, client, old_admin, _user) = setup_without_mocked_auth();
+    let new_admin = Address::generate(&env);
+
+    client
+        .mock_auths(&[MockAuth {
+            address: &old_admin,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "propose_admin",
+                args: (&new_admin,).into_val(&env),
+                sub_invokes: &[],
+            },
+        }])
+        .propose_admin(&new_admin);
+    assert_eq!(client.admin(), old_admin);
+
+    client
+        .mock_auths(&[MockAuth {
+            address: &new_admin,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "accept_admin",
+                args: ().into_val(&env),
+                sub_invokes: &[],
+            },
+        }])
+        .accept_admin();
+    assert_eq!(client.admin(), new_admin);
+}
+
+#[test]
+fn test_accept_admin_requires_proposed_address_auth() {
+    let (env, contract_id, client, old_admin, user) = setup_without_mocked_auth();
+    let new_admin = Address::generate(&env);
+    client
+        .mock_auths(&[MockAuth {
+            address: &old_admin,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "propose_admin",
+                args: (&new_admin,).into_val(&env),
+                sub_invokes: &[],
+            },
+        }])
+        .propose_admin(&new_admin);
+
+    let current_admin_result = client
+        .mock_auths(&[MockAuth {
+            address: &old_admin,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "accept_admin",
+                args: ().into_val(&env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_accept_admin();
+    assert!(current_admin_result.is_err(), "current admin may not accept");
+
+    let third_party_result = client
+        .mock_auths(&[MockAuth {
+            address: &user,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "accept_admin",
+                args: ().into_val(&env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_accept_admin();
+    assert!(third_party_result.is_err(), "third parties may not accept");
+    assert_eq!(client.admin(), old_admin);
+}
+
+#[test]
+fn test_propose_admin_can_be_overwritten_or_cancelled_before_acceptance() {
+    let t = setup(2, 1);
+    let first_proposal = Address::generate(&t.env);
+    let second_proposal = Address::generate(&t.env);
+
+    t.client.propose_admin(&first_proposal);
+    t.client.propose_admin(&second_proposal);
+    t.client.accept_admin();
+    assert_eq!(t.client.admin(), second_proposal);
+
+    t.client.propose_admin(&second_proposal);
+    let result = t.client.try_accept_admin();
+    assert!(matches!(result, Err(Ok(PoolError::NoPendingAdmin))));
+    assert_eq!(t.client.admin(), second_proposal);
+}
+
+#[test]
+fn test_propose_admin_emits_event() {
+    let t = setup(2, 1);
+    let new_admin = Address::generate(&t.env);
+    t.client.propose_admin(&new_admin);
+    assert_eq!(
+        t.env.events().all(),
+        soroban_sdk::vec![
+            &t.env,
+            (
+                t.contract_id.clone(),
+                soroban_sdk::vec![
+                    &t.env,
+                    soroban_sdk::symbol_short!("pool").into_val(&t.env),
+                    soroban_sdk::symbol_short!("adm_prop").into_val(&t.env)
+                ],
+                (t.admin.clone(), new_admin).into_val(&t.env),
+            )
+        ]
+    );
+}
+
+#[test]
 fn test_transfer_admin_changes_admin() {
     let t = setup(2, 1);
     let new_admin = Address::generate(&t.env);
@@ -1162,6 +1277,41 @@ fn test_unlock_allowed_well_past_min_lock_period() {
     advance_ledgers(&t.env, 500);
     t.client.unlock_assets(&t.user, &1_000);
     assert!(t.client.get_user_position(&t.user).is_none());
+}
+
+#[test]
+fn test_lock_assets_topup_after_maturity_extends_unlock_ledger() {
+    let t = setup_with_lock_period(1, 1, 100);
+    t.client.lock_assets(&t.user, &100);
+    advance_ledgers(&t.env, 100);
+
+    t.client.lock_assets(&t.user, &500);
+    let position = t.client.get_user_position(&t.user).unwrap();
+    assert_eq!(position.unlock_ledger, 200);
+    assert!(t.client.try_unlock_assets(&t.user, &600).is_err());
+
+    advance_ledgers(&t.env, 99);
+    assert!(t.client.try_unlock_assets(&t.user, &600).is_err());
+    advance_ledgers(&t.env, 1);
+    t.client.unlock_assets(&t.user, &600);
+    assert!(t.client.get_user_position(&t.user).is_none());
+}
+
+#[test]
+fn test_lock_assets_topup_does_not_shorten_existing_unlock_ledger() {
+    let t = setup_with_lock_period(1, 1, 1_000);
+    t.client.lock_assets(&t.user, &1_000);
+    let original_position = t.client.get_user_position(&t.user).unwrap();
+
+    advance_ledgers(&t.env, 10);
+    t.client.set_min_lock_period(&5u32);
+    t.client.lock_assets(&t.user, &100);
+
+    let topped_up_position = t.client.get_user_position(&t.user).unwrap();
+    assert_eq!(
+        topped_up_position.unlock_ledger,
+        original_position.unlock_ledger
+    );
 }
 
 // ── calculate_credits tests ───────────────────────────────────────────────────

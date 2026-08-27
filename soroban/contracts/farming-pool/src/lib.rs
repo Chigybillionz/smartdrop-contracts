@@ -507,6 +507,23 @@ impl FarmingPool {
         read_schema_version(&env)
     }
 
+    /// Schema migration entry-point (currently a no-op placeholder).
+    ///
+    /// This function exists so that future schema version bumps can perform
+    /// data migrations inside the same entry-point without changing the ABI.
+    /// At present `SCHEMA_VERSION == 1` and no stored data needs
+    /// transformation, so the call simply stamps the current version and
+    /// returns the previous one.
+    ///
+    /// Admin-only. Returns the schema version *before* this call.
+    ///
+    /// # Behaviour once real migrations are needed
+    ///
+    /// When `SCHEMA_VERSION` is bumped, add a `match` over the old version
+    /// that performs the necessary storage reads/writes (e.g. re-encoding a
+    /// stored struct, adding a new field with a default value, etc.) **before**
+    /// writing the new `SCHEMA_VERSION`. Each migration step must be idempotent
+    /// and should be tested in isolation.
     pub fn migrate(env: Env) -> Result<u32, PoolError> {
         require_initialized(&env)?;
         get_admin(&env)?.require_auth();

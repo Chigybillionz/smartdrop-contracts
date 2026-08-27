@@ -93,10 +93,10 @@ fn compute_vested(env: &Env) -> i128 {
             .unwrap_or(0);
     }
 
-    let current = env.ledger().sequence() as i128;
-    let cliff = get_cliff_ledger(env) as i128;
-    let start = get_start_ledger(env) as i128;
-    let end = get_end_ledger(env) as i128;
+    let current = i128::from(env.ledger().sequence());
+    let cliff = i128::from(get_cliff_ledger(env));
+    let start = i128::from(get_start_ledger(env));
+    let end = i128::from(get_end_ledger(env));
     let total = get_total_amount(env);
 
     if current < cliff {

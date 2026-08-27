@@ -23,14 +23,25 @@ const LEDGERS_PER_DAY: u128 = 17_280;
 ///
 /// `daily_rate` is kept as `create_pool`'s public unit because a per-day
 /// figure is what off-chain/product code already reasons about; ledger-level
-/// rates are an implementation detail of `FarmingPool`. Returns
-/// `InvalidCreditRate` if the conversion truncates to zero (`initialize`
-/// requires `credit_rate > 0`) or does not fit in `i128`.
+/// rates are an implementation detail of `FarmingPool`.
+///
+/// Conversion uses **ceiling** division (`(daily_rate + LEDGERS_PER_DAY - 1) /
+/// LEDGERS_PER_DAY`) rather than truncation. Truncation silently dropped valid
+/// small daily rates: e.g. `daily_rate = 17_279` divided by `LEDGERS_PER_DAY =
+/// 17_280` truncated to `0`, which `FarmingPool::initialize` then rejects with
+/// `InvalidCreditRate` (see #148). Ceiling division guarantees that *any*
+/// non-zero `daily_rate` yields a positive `credit_rate` of at least `1`
+/// (≈ `LEDGERS_PER_DAY` credits/day). The smallest `daily_rate` that converts
+/// to exactly `1` ledger credit is `LEDGERS_PER_DAY` itself; smaller values
+/// still round up to `1` and therefore over-accrue slightly, so callers
+/// wanting an exact daily rate should pass a multiple of `LEDGERS_PER_DAY`.
+/// Returns `InvalidCreditRate` only if `daily_rate == 0` or the rounded
+/// `credit_rate` does not fit in `i128`.
 fn daily_rate_to_credit_rate(daily_rate: u128) -> Result<i128, FactoryError> {
-    let per_ledger = daily_rate / LEDGERS_PER_DAY;
-    if per_ledger == 0 {
+    if daily_rate == 0 {
         return Err(FactoryError::InvalidCreditRate);
     }
+    let per_ledger = (daily_rate + LEDGERS_PER_DAY - 1) / LEDGERS_PER_DAY;
     i128::try_from(per_ledger).map_err(|_| FactoryError::InvalidCreditRate)
 }
 

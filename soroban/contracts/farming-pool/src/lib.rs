@@ -7,7 +7,7 @@ mod types;
 
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, BytesN, Env, Vec};
 pub use types::PoolError;
-use types::{BoostConfig, DataKey, Position, UserStake};
+use types::{BankedCreditTotals, BoostConfig, DataKey, Position, UserStake};
 
 // Expose compiled WASM bytes so sibling crates (e.g. `factory`) can upload the
 // real farming-pool contract in their integration tests via:
@@ -192,9 +192,9 @@ fn remove_user_stake(env: &Env, user: &Address) {
         .remove(&DataKey::UserStake(user.clone()));
 }
 
-fn set_banked_credits(env: &Env, user: &Address, credits: i128) {
+fn set_banked_credits(env: &Env, user: &Address, totals: BankedCreditTotals) {
     let key = DataKey::BankedCredits(user.clone());
-    env.storage().persistent().set(&key, &credits);
+    env.storage().persistent().set(&key, &totals);
     bump_user(env, &key);
 }
 
@@ -556,21 +556,22 @@ impl FarmingPool {
         bump_instance(&env);
 
         let mut total_returned = 0i128;
-        let mut banked_credits = 0i128;
+        let mut position_credits = 0i128;
+        let mut stake_credits = 0i128;
         let stake_token = get_stake_token(&env)?;
         let token = token::TokenClient::new(&env, &stake_token);
 
         if let Some(position) = get_position(&env, &user) {
             token.transfer(&env.current_contract_address(), &user, &position.amount);
             total_returned += position.amount;
-            banked_credits += position.total_credits;
+            position_credits = position.total_credits;
             remove_position(&env, &user);
         }
 
         if let Some(stake) = get_user_stake(&env, &user) {
             token.transfer(&env.current_contract_address(), &user, &stake.amount);
             total_returned += stake.amount;
-            banked_credits += stake.credits_banked;
+            stake_credits = stake.credits_banked;
             remove_user_stake(&env, &user);
         }
 
@@ -578,8 +579,17 @@ impl FarmingPool {
             return Err(PoolError::NoActiveStake);
         }
 
-        if banked_credits > 0 {
-            set_banked_credits(&env, &user, banked_credits);
+        // Bank the position and stake credits as separate totals so each staking
+        // system's accrual history survives even when a user held both (#145).
+        if position_credits > 0 || stake_credits > 0 {
+            set_banked_credits(
+                &env,
+                &user,
+                BankedCreditTotals {
+                    position_credits,
+                    stake_credits,
+                },
+            );
         }
 
         env.events().publish(
@@ -591,12 +601,28 @@ impl FarmingPool {
 
     pub fn get_banked_credits(env: Env, user: Address) -> i128 {
         bump_instance(&env);
-        let key = DataKey::BankedCredits(user);
-        let value: Option<i128> = env.storage().persistent().get(&key);
+        let totals = get_banked_credits_split(env, user).unwrap_or(BankedCreditTotals {
+            position_credits: 0,
+            stake_credits: 0,
+        });
+        totals.position_credits + totals.stake_credits
+    }
+
+    /// Return the banked credits for `user`, split by staking system. The
+    /// lock/unlock `position` and boost `stake` histories are kept separate so
+    /// that a user who held both does not lose which credits came from where
+    /// (#145). Returns zeros when `user` has no banked credits.
+    pub fn get_banked_credits_split(env: Env, user: Address) -> Result<BankedCreditTotals, PoolError> {
+        bump_instance(&env);
+        let key = DataKey::BankedCredits(user.clone());
+        let value: Option<BankedCreditTotals> = env.storage().persistent().get(&key);
         if value.is_some() {
             bump_user(&env, &key);
         }
-        value.unwrap_or(0)
+        Ok(value.unwrap_or(BankedCreditTotals {
+            position_credits: 0,
+            stake_credits: 0,
+        }))
     }
 
     // ── Whitelist system ──────────────────────────────────────────────────────
@@ -886,9 +912,14 @@ impl FarmingPool {
             return Err(PoolError::InvalidMinStakeAmount);
         }
 
+        let old_amount = Self::get_min_stake_amount(env.clone())?;
         env.storage()
             .instance()
             .set(&DataKey::MinStakeAmount, &amount);
+        env.events().publish(
+            (symbol_short!("pool"), symbol_short!("minst_set")),
+            (old_amount, amount),
+        );
 
         Ok(())
     }

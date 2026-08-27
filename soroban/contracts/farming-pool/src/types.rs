@@ -55,6 +55,17 @@ pub struct Position {
     pub credit_rate: i128,
 }
 
+/// Credits banked for a user by `emergency_withdraw`, kept as two distinct
+/// totals rather than a single merged sum so that the individual accrual
+/// history of the lock/unlock (`position`) and boost (`stake`) systems is not
+/// lost when a user has both. See #145.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct BankedCreditTotals {
+    pub position_credits: i128,
+    pub stake_credits: i128,
+}
+
 /// Storage keys for all persistent and instance data.
 #[contracttype]
 pub enum DataKey {

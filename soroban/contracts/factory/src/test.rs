@@ -929,14 +929,22 @@ fn test_create_pool_rejects_zero_daily_rate() {
 }
 
 #[test]
-fn test_create_pool_rejects_daily_rate_below_ledgers_per_day() {
+fn test_create_pool_accepts_daily_rate_below_ledgers_per_day_with_ceiling_rounding() {
     let t = setup();
     let asset = Address::generate(&t.env);
 
-    let result = t
+    // Before #148 the daily_rate -> credit_rate conversion truncated, so a
+    // sub-LEDGERS_PER_DAY daily_rate (17_279) became 0 and was rejected. Now it
+    // uses ceiling division, so it rounds up to credit_rate = 1 and the pool is
+    // created successfully.
+    let pool_id = t
         .client
-        .try_create_pool(&asset, &17_279u128, &2u32, &25u64, &0i128);
-    assert_eq!(result, Err(Ok(FactoryError::InvalidCreditRate)));
+        .create_pool(&asset, &17_279u128, &2u32, &25u64, &0i128);
+    assert_eq!(pool_id, 0);
+
+    let pool_addr = t.client.get_pool(&pool_id).address;
+    let pool = FarmingPoolClient::new(&t.env, &pool_addr);
+    assert_eq!(pool.credit_rate(), 1);
 }
 
 #[test]

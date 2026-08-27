@@ -232,7 +232,13 @@ fn test_upgrade_preserves_stake_storage_and_enables_new_wasm() {
     t.client.stake(&t.user, &1_000);
     advance_ledgers(&t.env, 10);
 
-    let before = t.client.get_stake(&t.user).expect("stake must exist");
+    let before = t.env.as_contract(&t.contract_id, || {
+        t.env
+            .storage()
+            .persistent()
+            .get::<DataKey, UserStake>(&DataKey::UserStake(t.user.clone()))
+    });
+    let before = before.expect("stake storage must exist before upgrade");
     let new_wasm_hash = upload_upgrade_target_wasm(&t.env);
 
     t.client.upgrade(&new_wasm_hash);
@@ -607,6 +613,19 @@ fn test_admin_multiplier_change_applies_from_next_checkpoint() {
     t.client.set_boost(&t.user, &50u32);
     advance_ledgers(&t.env, 10);
     // Next 10 ledgers: effective_stake = 2000 (50% @ 3×) → 20000 -> total 35,000
+    assert_eq!(t.client.get_credits(&t.user), 35_000);
+}
+
+#[test]
+fn test_admin_multiplier_change_applies_to_existing_stake_without_manual_checkpoint() {
+    let t = setup(2, 1);
+    t.client.stake(&t.user, &1_000);
+    t.client.set_boost(&t.user, &50u32);
+    advance_ledgers(&t.env, 10);
+
+    t.client.set_global_multiplier(&3u32);
+    advance_ledgers(&t.env, 10);
+
     assert_eq!(t.client.get_credits(&t.user), 35_000);
 }
 
@@ -1446,6 +1465,29 @@ fn test_get_user_position_returns_correct_fields() {
 }
 
 #[test]
+fn test_get_user_position_returns_accrued_credits() {
+    let t = setup(1, 1);
+    t.client.lock_assets(&t.user, &1_000);
+    advance_ledgers(&t.env, 5);
+
+    let pos = t.client.get_user_position(&t.user).unwrap();
+    assert_eq!(pos.total_credits, 5_000);
+    assert_eq!(pos.amount, 1_000);
+}
+
+#[test]
+fn test_get_stake_returns_accrued_credits() {
+    let t = setup(2, 1);
+    t.client.stake(&t.user, &1_000);
+    t.client.set_boost(&t.user, &50u32);
+    advance_ledgers(&t.env, 5);
+
+    let stake = t.client.get_stake(&t.user).unwrap();
+    assert_eq!(stake.credits_banked, 7_500);
+    assert_eq!(stake.amount, 1_000);
+}
+
+#[test]
 fn test_get_user_position_none_after_full_unlock() {
     let t = setup(1, 1);
     t.client.lock_assets(&t.user, &1_000);
@@ -1518,6 +1560,27 @@ fn test_unpause_emits_event() {
         !t.env.events().all().events().is_empty(),
         "unpause event not emitted"
     );
+}
+
+#[test]
+fn test_pause_staking_blocks_new_stakes_but_allows_withdrawals() {
+    let t = setup(2, 1);
+    t.client.stake(&t.user, &1_000);
+    t.client.pause_staking();
+
+    assert!(t.client.try_stake(&t.user, &100i128).is_err());
+    assert!(t.client.try_lock_assets(&t.user, &100i128).is_err());
+    t.client.unstake(&t.user);
+}
+
+#[test]
+fn test_pause_withdrawals_blocks_unstake_but_allows_new_stakes() {
+    let t = setup(2, 1);
+    t.client.pause_withdrawals();
+    t.client.stake(&t.user, &1_000);
+
+    assert!(t.client.try_unstake(&t.user).is_err());
+    assert!(t.client.try_unlock_assets(&t.user, &100i128).is_err());
 }
 
 #[test]

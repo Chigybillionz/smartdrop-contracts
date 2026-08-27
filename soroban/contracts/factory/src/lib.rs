@@ -125,10 +125,10 @@ fn insert_sorted(
     record: (u32, PoolRecord),
     sort: PoolSort,
 ) {
-    let mut insert_at = records.len();
+    let mut insert_at: u32 = records.len();
     for (index, existing) in records.iter().enumerate() {
         if sort_precedes(sort, &record, &existing) {
-            insert_at = index;
+            insert_at = index as u32;
             break;
         }
     }
@@ -493,6 +493,9 @@ impl Factory {
         if pool_admin != admin {
             return Err(FactoryError::PoolAdminMismatch);
         }
+        if new_wasm_hash == record.wasm_hash {
+            return Err(FactoryError::PoolUpgradeFailed);
+        }
 
         let upgrade_args: Vec<Val> = vec![&env, new_wasm_hash.clone().into_val(&env)];
         let upgrade_res = env.try_invoke_contract::<(), soroban_sdk::Error>(
@@ -608,7 +611,7 @@ impl Factory {
         let pool_address = env
             .deployer()
             .with_current_contract(salt)
-            .deploy_v2(wasm_hash, ());
+            .deploy_v2(wasm_hash.clone(), ());
 
         // Call the freshly deployed pool's `initialize` directly via
         // `invoke_contract` rather than depending on the `farming-pool`

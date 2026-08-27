@@ -503,6 +503,19 @@ fn test_set_credit_rate_updates_public_getters() {
 }
 
 #[test]
+fn test_min_lock_period_seconds() {
+    // 12 ledgers * ~5s/ledger = 60 seconds (#166).
+    let t = setup_with_lock_period(2, 1, 12);
+    assert_eq!(t.client.min_lock_period_seconds(), 60);
+    assert_eq!(t.client.get_min_lock_period_seconds(), 60);
+
+    // 30 ledgers -> 150 seconds; also confirms it tracks set_min_lock_period.
+    t.client.set_min_lock_period(&25u32);
+    assert_eq!(t.client.min_lock_period_seconds(), 125);
+    assert_eq!(t.client.get_min_lock_period_seconds(), 125);
+}
+
+#[test]
 fn test_set_credit_rate_rejects_zero_with_typed_error() {
     let t = setup(2, 1);
     let result = t.client.try_set_credit_rate(&0i128);
@@ -770,6 +783,24 @@ fn test_unstake_returns_tokens_and_credits() {
     assert_eq!(credits, 15_000); // 1500 * 10
     assert_eq!(t.token.balance(&t.user), initial_balance);
     assert!(t.client.get_stake(&t.user).is_none());
+}
+
+#[test]
+fn test_flash_stake_unstake_in_same_ledger_yields_no_credits() {
+    // Regression for #169: stake has no lock period, so a user CAN immediately
+    // unstake — but an immediate round-trip in the same ledger must earn no
+    // credits, i.e. flash-staking provides no reward and no leverage.
+    let t = setup(2, 1);
+    let initial_balance = t.token.balance(&t.user);
+    t.client.set_boost(&t.user, &100u32);
+
+    t.client.stake(&t.user, &1_000);
+    let credits = t.client.unstake(&t.user);
+
+    assert_eq!(credits, 0, "flash staking must not mint credits");
+    assert_eq!(t.token.balance(&t.user), initial_balance, "principal fully returned");
+    assert!(t.client.get_stake(&t.user).is_none());
+    assert_eq!(t.client.get_credits(&t.user), 0);
 }
 
 #[test]
@@ -1864,6 +1895,70 @@ fn test_batch_add_to_whitelist_exceeds_limit() {
         users.push_back(Address::generate(&t.env));
     }
     t.client.batch_add_to_whitelist(&users);
+}
+
+#[test]
+fn test_batch_remove_from_whitelist() {
+    let t = setup(2, 1);
+    t.client.enable_whitelist();
+
+    let user1 = Address::generate(&t.env);
+    let user2 = Address::generate(&t.env);
+    let user3 = Address::generate(&t.env);
+
+    let mut users = soroban_sdk::Vec::new(&t.env);
+    users.push_back(user1.clone());
+    users.push_back(user2.clone());
+    users.push_back(user3.clone());
+
+    t.client.batch_add_to_whitelist(&users);
+    assert!(t.client.is_whitelisted(&user1));
+    assert!(t.client.is_whitelisted(&user2));
+    assert!(t.client.is_whitelisted(&user3));
+
+    // Batch remove exactly mirrors the batch add (#167): all three gone at once.
+    t.client.batch_remove_from_whitelist(&users);
+    assert!(!t.client.is_whitelisted(&user1));
+    assert!(!t.client.is_whitelisted(&user2));
+    assert!(!t.client.is_whitelisted(&user3));
+
+    // Removed users can no longer stake.
+    let result_stake = t.client.try_stake(&user1, &100);
+    assert!(matches!(result_stake, Err(Ok(PoolError::NotWhitelisted))));
+}
+
+#[test]
+#[should_panic(expected = "max 50 addresses per call")]
+fn test_batch_remove_from_whitelist_exceeds_limit() {
+    let t = setup(2, 1);
+    let mut users = soroban_sdk::Vec::new(&t.env);
+    for _ in 0..51 {
+        users.push_back(Address::generate(&t.env));
+    }
+    t.client.batch_remove_from_whitelist(&users);
+}
+
+#[test]
+fn test_batch_remove_from_whitelist_requires_admin_auth() {
+    let (env, contract_id, client, _admin, user) = setup_without_mocked_auth();
+
+    let users = soroban_sdk::vec![&env, user.clone()];
+    let result = client
+        .mock_auths(&[MockAuth {
+            address: &user,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "batch_remove_from_whitelist",
+                args: (users.clone(),).into_val(&env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_batch_remove_from_whitelist(&users);
+
+    assert!(
+        result.is_err(),
+        "non-admin batch_remove_from_whitelist must be rejected"
+    );
 }
 
 #[test]

@@ -736,9 +736,13 @@ impl FarmingPool {
             }
         };
 
-        // Pull tokens from caller into the contract.
         new_stake.credit_rate = read_credit_rate(&env);
 
+        // Checks-effects-interactions: persist state *before* the external
+        // token transfer below, consistent with `lock_assets`. See #69.
+        set_user_stake(&env, &from, &new_stake);
+
+        // Pull tokens from caller into the contract.
         let stake_token = get_stake_token(&env)?;
         token::TokenClient::new(&env, &stake_token).transfer(
             &from,
@@ -746,7 +750,6 @@ impl FarmingPool {
             &amount,
         );
 
-        set_user_stake(&env, &from, &new_stake);
         Ok(())
     }
 

@@ -482,6 +482,23 @@ fn test_upgrade_pool_hot_swaps_registered_pool_without_changing_factory_hash() {
 }
 
 #[test]
+fn test_upgrade_pool_same_hash_returns_pool_upgrade_failed() {
+    let t = setup();
+    let pool_id = t.client.create_pool(
+        &Address::generate(&t.env),
+        &1_728_000u128,
+        &2u32,
+        &10u64,
+        &0i128,
+    );
+
+    assert_eq!(
+        t.client.try_upgrade_pool(&pool_id, &t.wasm_hash),
+        Err(Ok(FactoryError::PoolUpgradeFailed))
+    );
+}
+
+#[test]
 fn test_upgrade_pool_missing_pool_returns_not_found() {
     let t = setup();
     let new_wasm_hash = t.wasm_hash.clone();

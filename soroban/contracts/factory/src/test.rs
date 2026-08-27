@@ -96,6 +96,8 @@ fn setup_with_pool_records(count: u32) -> TestEnv {
                 credit_rate: 100 + pool_id as i128,
                 global_multiplier: 1 + pool_id,
                 min_lock_period: 10 + pool_id,
+                daily_rate: (100 + pool_id as u128) * 17280,
+                wasm_hash: soroban_sdk::BytesN::from_array(&t.env, &[0; 32]),
             };
             t.env
                 .storage()
@@ -461,7 +463,7 @@ fn test_upgrade_pool_hot_swaps_registered_pool_without_changing_factory_hash() {
                     symbol_short!("factory").into_val(&t.env),
                     symbol_short!("pool_upg").into_val(&t.env),
                 ],
-                (pool_id, pool_addr.clone(), new_wasm_hash.clone()).into_val(&t.env),
+                (pool_id, pool_addr.clone(), t.wasm_hash.clone(), new_wasm_hash.clone()).into_val(&t.env),
             )
         ]
     );
@@ -540,6 +542,8 @@ fn test_upgrade_pool_non_upgradable_pool_returns_pool_upgrade_failed() {
         credit_rate: 100,
         global_multiplier: 1,
         min_lock_period: 10,
+        daily_rate: 100 * 17280,
+        wasm_hash: soroban_sdk::BytesN::from_array(&t.env, &[0; 32]),
     };
     t.env.as_contract(&t.factory_addr, || {
         t.env
@@ -1107,7 +1111,7 @@ fn test_create_pool_emits_pool_crtd_event_with_payload() {
                     symbol_short!("factory").into_val(&t.env),
                     symbol_short!("pool_crtd").into_val(&t.env),
                 ],
-                (id, expected_address, asset, 300i128, 2u32, 30u32).into_val(&t.env),
+                (id, expected_address, asset, 300i128, 2u32, 30u32, 5_184_000u128, t.wasm_hash.clone()).into_val(&t.env),
             )
         ]
     );

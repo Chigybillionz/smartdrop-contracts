@@ -235,7 +235,7 @@ impl Factory {
             .instance()
             .get(&DataKey::PoolCount)
             .unwrap_or(0);
-        let capped_limit = limit.min(20);
+        let capped_limit = if limit == 0 { 20 } else { limit.min(20) };
         let end = start_id.saturating_add(capped_limit).min(count);
         let mut records: Vec<(u32, PoolRecord)> = vec![&env];
 
@@ -275,7 +275,7 @@ impl Factory {
             .instance()
             .get(&DataKey::PoolCount)
             .unwrap_or(0);
-        let capped_limit = limit.min(20);
+        let capped_limit = if limit == 0 { 20 } else { limit.min(20) };
         let end = start_id.saturating_add(capped_limit).min(count);
         let mut records: Vec<(u32, PoolRecord)> = vec![&env];
 
@@ -331,7 +331,7 @@ impl Factory {
             .instance()
             .get(&DataKey::PoolCount)
             .unwrap_or(0);
-        let capped_limit = limit.min(20);
+        let capped_limit = if limit == 0 { 20 } else { limit.min(20) };
         let effective_scan = if scan_limit == 0 {
             MAX_POOL_SCAN_PER_CALL
         } else {
@@ -470,7 +470,7 @@ impl Factory {
         bump_instance(&env);
 
         let key = DataKey::Pool(pool_id);
-        let record = env
+        let mut record = env
             .storage()
             .persistent()
             .get::<DataKey, PoolRecord>(&key)
@@ -502,10 +502,14 @@ impl Factory {
             _ => return Err(FactoryError::PoolUpgradeFailed),
         }
 
+        let old_hash = record.wasm_hash.clone();
+        record.wasm_hash = new_wasm_hash.clone();
+        env.storage().persistent().set(&key, &record);
+
         #[allow(deprecated)]
         env.events().publish(
             (symbol_short!("factory"), symbol_short!("pool_upg")),
-            (pool_id, record.address, new_wasm_hash),
+            (pool_id, record.address, old_hash, new_wasm_hash),
         );
 
         Ok(())
@@ -624,6 +628,8 @@ impl Factory {
             credit_rate,
             global_multiplier,
             min_lock_period,
+            daily_rate,
+            wasm_hash: wasm_hash.clone(),
         };
         env.storage()
             .persistent()
@@ -644,6 +650,7 @@ impl Factory {
                 credit_rate,
                 global_multiplier,
                 min_lock_period,
+                wasm_hash,
             ),
         );
 

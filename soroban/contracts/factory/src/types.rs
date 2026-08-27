@@ -33,6 +33,10 @@ pub struct PoolRecord {
     pub global_multiplier: u32,
     /// Minimum number of ledgers a stake must be held before withdrawal.
     pub min_lock_period: u32,
+    /// The originally requested daily rate, preserved here before ledger conversion.
+    pub daily_rate: u128,
+    /// The WASM hash used to deploy or upgrade the pool.
+    pub wasm_hash: soroban_sdk::BytesN<32>,
 }
 
 /// Sort keys supported by `list_pools_sorted`.

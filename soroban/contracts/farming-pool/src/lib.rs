@@ -7,7 +7,7 @@ mod types;
 
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, BytesN, Env, Vec};
 pub use types::PoolError;
-use types::{BankedCreditTotals, BoostConfig, DataKey, Position, UserStake};
+use types::{BankedCreditTotals, BoostConfig, DataKey, ListWhitelistedResponse, Position, UserStake};
 
 // Expose compiled WASM bytes so sibling crates (e.g. `factory`) can upload the
 // real farming-pool contract in their integration tests via:
@@ -285,6 +285,19 @@ fn is_user_whitelisted(env: &Env, user: &Address) -> bool {
         bump_user(env, &key);
     }
     ok
+}
+
+fn get_whitelisted_users_list(env: &Env) -> Vec<Address> {
+    env.storage()
+        .instance()
+        .get(&DataKey::WhitelistedUsers)
+        .unwrap_or(Vec::new(env))
+}
+
+fn set_whitelisted_users_list(env: &Env, users: &Vec<Address>) {
+    env.storage()
+        .instance()
+        .set(&DataKey::WhitelistedUsers, users);
 }
 
 // ── Boost calculation ─────────────────────────────────────────────────────────
@@ -885,6 +898,12 @@ impl FarmingPool {
         let key = DataKey::Whitelisted(user.clone());
         env.storage().persistent().set(&key, &true);
         bump_user(&env, &key);
+
+        let mut users = get_whitelisted_users_list(&env);
+        if !users.contains(&user) {
+            users.push_back(user);
+            set_whitelisted_users_list(&env, &users);
+        }
         Ok(())
     }
 
@@ -896,6 +915,15 @@ impl FarmingPool {
 
         let key = DataKey::Whitelisted(user.clone());
         env.storage().persistent().remove(&key);
+
+        let mut users = get_whitelisted_users_list(&env);
+        let mut new_users: Vec<Address> = Vec::new(&env);
+        for u in users.iter() {
+            if u != user {
+                new_users.push_back(u);
+            }
+        }
+        set_whitelisted_users_list(&env, &new_users);
         Ok(())
     }
 
@@ -905,6 +933,36 @@ impl FarmingPool {
         is_user_whitelisted(&env, &user)
     }
 
+    /// Return a paginated list of all whitelisted addresses.
+    ///
+    /// `offset`: zero-based index of the first address to return.
+    /// `limit`: maximum number of addresses to return per call.
+    ///
+    /// Returns a `ListWhitelistedResponse` containing the requested page and
+    /// the total number of whitelisted addresses. Call repeatedly with
+    /// increasing `offset` until `offset >= total` to retrieve the full list.
+    pub fn get_whitelisted_users(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> Result<ListWhitelistedResponse, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+
+        let all = get_whitelisted_users_list(&env);
+        let total = all.len();
+        let mut page: Vec<Address> = Vec::new(&env);
+        let mut i = offset;
+        let mut count = 0u32;
+        while i < total && count < limit {
+            page.push_back(all.get(i).unwrap());
+            i += 1;
+            count += 1;
+        }
+
+        Ok(ListWhitelistedResponse { users: page, total })
+    }
+
     /// Admin: batch add multiple `users` to the whitelist. Capped at 50 addresses per call. Admin must authorise.
     pub fn batch_add_to_whitelist(env: Env, users: Vec<Address>) -> Result<(), PoolError> {
         require_initialized(&env)?;
@@ -912,11 +970,17 @@ impl FarmingPool {
         assert!(users.len() <= 50, "max 50 addresses per call");
         bump_instance(&env);
 
+        let mut list = get_whitelisted_users_list(&env);
         for user in users.iter() {
             let key = DataKey::Whitelisted(user.clone());
             env.storage().persistent().set(&key, &true);
             bump_user(&env, &key);
+
+            if !list.contains(&user) {
+                list.push_back(user);
+            }
         }
+        set_whitelisted_users_list(&env, &list);
         Ok(())
     }
 
@@ -931,10 +995,20 @@ impl FarmingPool {
         assert!(users.len() <= 50, "max 50 addresses per call");
         bump_instance(&env);
 
+        let mut list = get_whitelisted_users_list(&env);
         for user in users.iter() {
             let key = DataKey::Whitelisted(user.clone());
             env.storage().persistent().remove(&key);
+
+            let mut new_list: Vec<Address> = Vec::new(&env);
+            for u in list.iter() {
+                if u != user {
+                    new_list.push_back(u);
+                }
+            }
+            list = new_list;
         }
+        set_whitelisted_users_list(&env, &list);
         Ok(())
     }
 

@@ -1,4 +1,4 @@
-use soroban_sdk::{contracterror, contracttype, Address};
+use soroban_sdk::{contracterror, contracttype, Address, Vec};
 
 /// Error codes returned by the farming pool contract.
 #[contracterror]
@@ -102,6 +102,18 @@ pub enum DataKey {
     // Whitelist keys
     WhitelistEnabled,
     Whitelisted(Address),
+    /// Ordered list of all currently whitelisted addresses (instance storage).
+    WhitelistedUsers,
     MinStakeAmount,
     TotalStaked,
+}
+
+/// Paginated response for `get_whitelisted_users`.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ListWhitelistedResponse {
+    /// Whitelisted addresses in the requested page.
+    pub users: Vec<Address>,
+    /// Total number of whitelisted addresses.
+    pub total: u32,
 }

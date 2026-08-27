@@ -782,8 +782,8 @@ impl FarmingPool {
 
         require_initialized(&env)?;
         assert!(
-            (1..=100).contains(&allocation_pct),
-            "allocation_pct must be 1-100"
+            (0..=100).contains(&allocation_pct),
+            "allocation_pct must be 0-100"
         );
         bump_instance(&env);
 
@@ -793,8 +793,12 @@ impl FarmingPool {
         }
 
         let key = DataKey::UserBoost(user.clone());
-        env.storage().persistent().set(&key, &allocation_pct);
-        bump_user(&env, &key);
+        if allocation_pct == 0 {
+            env.storage().persistent().remove(&key);
+        } else {
+            env.storage().persistent().set(&key, &allocation_pct);
+            bump_user(&env, &key);
+        }
 
         let multiplier = read_global_multiplier(&env);
         env.events().publish(

@@ -190,7 +190,7 @@ impl VestingWallet {
 
         let vested = compute_vested(&env);
         let released = get_released(&env);
-        let releasable = vested - released;
+        let releasable = vested.saturating_sub(released);
 
         if releasable == 0 {
             return Ok(0);

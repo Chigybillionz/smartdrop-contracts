@@ -5,7 +5,7 @@ mod types;
 use soroban_sdk::{
     contract, contractimpl, symbol_short, vec, Address, BytesN, Env, IntoVal, Symbol, Val, Vec,
 };
-use types::{DataKey, FactoryError, ListPoolsResponse, PoolRecord};
+use types::{DataKey, FactoryError, ListPoolsResponse, PoolRecord, PoolSort};
 
 // ~30 days at ~5 s/ledger; extend to ~60 days when below threshold.
 const TTL_THRESHOLD: u32 = 518_400;
@@ -93,6 +93,43 @@ fn pool_salt(env: &Env, pool_id: u32) -> BytesN<32> {
     let mut bytes = [0u8; 32];
     bytes[28..].copy_from_slice(&pool_id.to_be_bytes());
     BytesN::from_array(env, &bytes)
+}
+
+fn validate_asset(env: &Env, asset: &Address) -> Result<(), FactoryError> {
+    let args: Vec<Val> = vec![&env, env.current_contract_address().into_val(env)];
+    match env.try_invoke_contract::<i128, soroban_sdk::Error>(
+        asset,
+        &Symbol::new(env, "balance"),
+        args,
+    ) {
+        Ok(Ok(balance)) if balance >= 0 => Ok(()),
+        _ => Err(FactoryError::InvalidAsset),
+    }
+}
+
+fn sort_precedes(sort: PoolSort, left: &(u32, PoolRecord), right: &(u32, PoolRecord)) -> bool {
+    let ordering = match sort {
+        PoolSort::PoolId => left.0.cmp(&right.0),
+        PoolSort::CreditRate => left.1.credit_rate.cmp(&right.1.credit_rate),
+        PoolSort::GlobalMultiplier => left.1.global_multiplier.cmp(&right.1.global_multiplier),
+        PoolSort::MinLockPeriod => left.1.min_lock_period.cmp(&right.1.min_lock_period),
+    };
+    ordering.is_lt() || (ordering.is_eq() && left.0 < right.0)
+}
+
+fn insert_sorted(
+    records: &mut Vec<(u32, PoolRecord)>,
+    record: (u32, PoolRecord),
+    sort: PoolSort,
+) {
+    let mut insert_at = records.len();
+    for (index, existing) in records.iter().enumerate() {
+        if sort_precedes(sort, &record, &existing) {
+            insert_at = index;
+            break;
+        }
+    }
+    records.insert(insert_at, record);
 }
 
 #[contract]
@@ -207,6 +244,46 @@ impl Factory {
             if let Some(record) = env.storage().persistent().get::<DataKey, PoolRecord>(&key) {
                 bump_pool(&env, pool_id);
                 records.push_back((pool_id, record));
+            }
+        }
+
+        Ok(ListPoolsResponse {
+            records,
+            next_start_id: if end < count { end } else { count },
+            total: count,
+        })
+    }
+
+    /// Return a page of pool records sorted by a supported stored field.
+    ///
+    /// `start_id` and `limit` retain the same bounded ID-window semantics as
+    /// `list_pools`; sorting is applied to the records found in that window.
+    /// Use `PoolSort::PoolId` for behavior equivalent to `list_pools`.
+    /// Records with equal sort values are ordered by ascending pool ID.
+    /// Creation time, TVL, and asset ordering are not available from the
+    /// factory's current on-chain record and should be supplied by an indexer.
+    pub fn list_pools_sorted(
+        env: Env,
+        start_id: u32,
+        limit: u32,
+        sort: PoolSort,
+    ) -> Result<ListPoolsResponse, FactoryError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::PoolCount)
+            .unwrap_or(0);
+        let capped_limit = limit.min(20);
+        let end = start_id.saturating_add(capped_limit).min(count);
+        let mut records: Vec<(u32, PoolRecord)> = vec![&env];
+
+        for pool_id in start_id..end {
+            let key = DataKey::Pool(pool_id);
+            if let Some(record) = env.storage().persistent().get::<DataKey, PoolRecord>(&key) {
+                bump_pool(&env, pool_id);
+                insert_sorted(&mut records, (pool_id, record), sort);
             }
         }
 
@@ -494,6 +571,7 @@ impl Factory {
         let admin = load_admin(&env)?;
         admin.require_auth();
         bump_instance(&env);
+        validate_asset(&env, &asset)?;
 
         if global_multiplier < 1 {
             return Err(FactoryError::InvalidGlobalMultiplier);

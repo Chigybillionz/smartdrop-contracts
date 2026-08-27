@@ -35,6 +35,20 @@ pub struct PoolRecord {
     pub min_lock_period: u32,
 }
 
+/// Sort keys supported by `list_pools_sorted`.
+#[contracttype]
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum PoolSort {
+    /// Sort by pool ID in ascending order.
+    PoolId,
+    /// Sort by per-ledger credit rate in ascending order.
+    CreditRate,
+    /// Sort by global multiplier in ascending order.
+    GlobalMultiplier,
+    /// Sort by minimum lock period in ascending order.
+    MinLockPeriod,
+}
+
 /// Paginated pool registry response.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -88,4 +102,6 @@ pub enum FactoryError {
     /// `upgrade_pool` failed because the target pool does not support upgrades
     /// (e.g. older deployment without upgrade/admin entry points) or the upgrade call failed.
     PoolUpgradeFailed = 10,
+        /// `create_pool`'s asset does not respond as a valid token contract.
+        InvalidAsset = 11,
 }

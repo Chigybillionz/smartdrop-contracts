@@ -18,6 +18,8 @@ pub enum PoolError {
     /// Returned by `emergency_withdraw` when the user has no stake or locked position.
     NoActiveStake = 9,
     Paused = 10,
+    /// Returned by `accept_admin` when no admin handoff is pending.
+    NoPendingAdmin = 11,
 }
 
 /// Per-user boost configuration returned by `get_boost_config`.
@@ -49,15 +51,18 @@ pub struct UserStake {
 /// Recorded state for a user's locking position in the time-locked staking system.
 ///
 /// `Position` enforces a mandatory minimum lock duration (`min_lock_period`), preventing
-/// withdrawals via `unlock_assets` until `unlock_ledger` is reached. Accrual is calculated
-/// using `amount * credit_rate * elapsed`. Emits structured `locked` and `unlocked` events.
+/// withdrawals via `unlock_assets` until `unlock_ledger` is reached. Adding to an existing
+/// position extends `unlock_ledger` to the later of its current value and a fresh lock period
+/// from the top-up ledger. Accrual is calculated using `amount * credit_rate * elapsed`.
+/// Emits structured `locked` and `unlocked` events.
 /// Users interact via `lock_assets`, `unlock_assets`, `calculate_credits`, and `get_user_position`.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct Position {
     pub amount: i128,
     pub lock_ledger: u32,
-    /// Earliest ledger at which the position may be unlocked.
+    /// Earliest ledger at which the whole position may be unlocked. Top-ups
+    /// extend this to at least a fresh minimum lock period from the top-up.
     pub unlock_ledger: u32,
     pub checkpoint_ledger: u32,
     pub total_credits: i128,
@@ -80,6 +85,7 @@ pub struct BankedCreditTotals {
 #[contracttype]
 pub enum DataKey {
     Admin,
+    PendingAdmin,
     GlobalMultiplier,
     CreditRate,
     StakeToken,

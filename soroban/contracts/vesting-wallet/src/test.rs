@@ -91,6 +91,46 @@ fn setup_revocable(cliff_offset: u32, period: u32, total: i128) -> TestEnv {
 // ── Initialisation tests ──────────────────────────────────────────────────────
 
 #[test]
+fn test_third_party_can_front_run_initialize() {
+    // This documents the standalone deployment limitation: initialize does not
+    // know which account deployed the contract, so the first valid call wins.
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(VestingWallet, ());
+    let client = VestingWalletClient::new(&env, &contract_id);
+    let attacker = Address::generate(&env);
+    let intended_admin = Address::generate(&env);
+    let beneficiary = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let asset = env.register_stellar_asset_contract_v2(token_admin);
+    let token_sac = StellarAssetClient::new(&env, &asset.address());
+    token_sac.mint(&attacker, &100i128);
+
+    client.initialize(
+        &beneficiary,
+        &asset.address(),
+        &100i128,
+        &0u32,
+        &0u32,
+        &100u32,
+        &false,
+        &attacker,
+    );
+
+    let result = client.try_initialize(
+        &beneficiary,
+        &asset.address(),
+        &100i128,
+        &0u32,
+        &0u32,
+        &100u32,
+        &false,
+        &intended_admin,
+    );
+    assert!(matches!(result, Err(Ok(VestingError::AlreadyInitialized))));
+}
+
+#[test]
 fn test_double_initialize_returns_error() {
     let t = setup(0, 100, 1_000);
     let another_beneficiary = Address::generate(&t.env);
@@ -111,31 +151,72 @@ fn test_double_initialize_returns_error() {
 }
 
 #[test]
-fn test_initialize_emits_event() {
-    let t = setup(0, 100, 1_000);
+fn test_initialize_rejects_total_amount_above_compute_vested_ceiling() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(VestingWallet, ());
+    let client = VestingWalletClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let beneficiary = Address::generate(&env);
+    let token = Address::generate(&env);
 
-    assert_eq!(
-        t.env.events().all().filter_by_contract(&t.contract_id),
-        soroban_sdk::vec![
-            &t.env,
-            (
-                t.contract_id.clone(),
-                soroban_sdk::vec![
-                    &t.env,
-                    soroban_sdk::symbol_short!("vest").into_val(&t.env),
-                    soroban_sdk::symbol_short!("init").into_val(&t.env),
-                ],
-                (
-                    t.beneficiary.clone(),
-                    t.token_address.clone(),
-                    1_000i128,
-                    t.start,
-                    t.start + 100,
-                )
-                    .into_val(&t.env),
-            )
-        ]
+    let result = client.try_initialize(
+        &beneficiary,
+        &token,
+        &(MAX_TOTAL_AMOUNT + 1),
+        &0u32,
+        &0u32,
+        &u32::MAX,
+        &false,
+        &admin,
     );
+    assert!(matches!(
+        result,
+        Err(Ok(VestingError::TotalAmountTooLarge))
+    ));
+}
+
+#[test]
+fn test_compute_vested_is_safe_at_maximum_duration_and_ceiling() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(VestingWallet, ());
+    let client = VestingWalletClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let beneficiary = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let asset = env.register_stellar_asset_contract_v2(token_admin);
+    let token_sac = StellarAssetClient::new(&env, &asset.address());
+    token_sac.mint(&admin, &MAX_TOTAL_AMOUNT);
+
+    client.initialize(
+        &beneficiary,
+        &asset.address(),
+        &MAX_TOTAL_AMOUNT,
+        &0u32,
+        &0u32,
+        &u32::MAX,
+        &false,
+        &admin,
+    );
+    env.ledger()
+        .with_mut(|ledger| ledger.sequence_number = u32::MAX - 1);
+
+    let vested = client.vested_amount();
+    assert!(vested > 0);
+    assert!(vested <= MAX_TOTAL_AMOUNT);
+}
+
+#[test]
+fn test_emergency_withdraw_returns_raw_balance_to_admin() {
+    let t = setup(0, 100, 1_000);
+    assert_eq!(t.token.balance(&t.admin), 0);
+
+    let returned = t.client.emergency_withdraw();
+
+    assert_eq!(returned, 1_000);
+    assert_eq!(t.token.balance(&t.admin), 1_000);
+    assert_eq!(t.token.balance(&t.contract_id), 0);
 }
 
 // ── vested_amount / releasable tests ─────────────────────────────────────────

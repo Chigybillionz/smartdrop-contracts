@@ -407,7 +407,33 @@ impl Factory {
     /// Operators should call this function across the full ID range at least once
     /// every ~45 days (between TTL_THRESHOLD of ~30 days and TTL_EXTEND_TO of
     /// ~60 days) to ensure all pool records remain accessible.
+    ///
+    /// # Security implications of being permissionless (#168)
+    /// Any caller may extend pool-record TTLs. The blast radius is intentionally
+    /// bounded and non-hazardous:
+    /// - A refresh only **extends** TTLs; it can never shorten them, prune
+    ///   records, or mutate pool data. It therefore cannot corrupt state.
+    /// - Each call is capped at 20 pool IDs and fees are paid by the caller, so
+    ///   an attacker cannot cheaply undercut rational keepers nor permanently
+    ///   pin a pool against archival — every ~45-day cycle requires a fresh
+    ///   low-value call and re-accruing storage rent.
+    /// - Pool records that should be retired are at most kept alive (not
+    ///   protected in any other way): they remain stale and can be ignored by
+    ///   frontends, and the pool's on-chain asset transfers are unaffected.
+    /// - The maximum consequential cost of abuse is bounded storage-rent for
+    ///   stale records, which is recovered through fees paid by the refresher.
+    ///
+    /// This is why the function deliberately remains permissionless: an
+    /// admin-gated or rate-limited variant would reintroduce the archival risk
+    /// it exists to prevent (a factory whose only keep-alive relies on a single
+    /// admin becomes a single point of failure). For pools that must be
+    /// decommissioned, the durable admin path is to stop refreshing them and
+    /// let their TTL lapse, or archive/white-list them off-chain rather than
+    /// relying on attacker interference.
+    ///
+    /// Returns `NotInitialized` if the factory has not been initialized.
     pub fn refresh_pool_ttls(env: Env, start_id: u32, limit: u32) -> Result<(), FactoryError> {
+        require_initialized(&env)?;
         bump_instance(&env);
         let count: u32 = env
             .storage()

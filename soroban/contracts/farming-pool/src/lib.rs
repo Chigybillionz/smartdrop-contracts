@@ -903,9 +903,48 @@ impl FarmingPool {
         Ok(())
     }
 
+    /// Admin: batch remove multiple `users` from the whitelist. Capped at 50 addresses per call. Admin must authorise.
+    ///
+    /// Mirrors `batch_add_to_whitelist` so admins who need to revoke many
+    /// users do not have to issue one `remove_from_whitelist` call per user,
+    /// which is gas-inefficient. See #167.
+    pub fn batch_remove_from_whitelist(env: Env, users: Vec<Address>) -> Result<(), PoolError> {
+        require_initialized(&env)?;
+        get_admin(&env)?.require_auth();
+        assert!(users.len() <= 50, "max 50 addresses per call");
+        bump_instance(&env);
+
+        for user in users.iter() {
+            let key = DataKey::Whitelisted(user.clone());
+            env.storage().persistent().remove(&key);
+        }
+        Ok(())
+    }
+
     // ── Boost / Stake system ─────────────────────────────────────────────────
 
     /// Stake `amount` tokens. If a prior stake exists, earned credits are checkpointed first.
+    ///
+    /// # No minimum lock period — deliberately
+    /// Unlike `lock_assets`, this flexible stake system has **no** enforced lock
+    /// period and `unstake` can be called immediately. This is an intentional
+    /// design property of the boost/stake system (see `docs/staking_systems.md`),
+    /// not an oversight: it is a separate continuous-staking model built for
+    /// flexible deposits where a lock would defeat its purpose.
+    ///
+    /// The "flash-staking" concern raised in #169 (stake and immediately
+    /// unstake) exposes no privilege, because:
+    /// - A stake is **not** a loan of leverage: the pool never owes more than
+    ///   the exact staked amount, and `unstake` returns only `stake.amount`.
+    /// - Credits accrue linearly over *elapsed ledgers* (see `compute_stake_accrual`),
+    ///   so an immediate round-trip banks ~0 credits; there is no fixed
+    ///   up-front reward to harvest.
+    /// - On stake, the position is checkpointed to the current ledger and
+    ///   credit rate; on unstake it is checkpointed again, so any intermediate
+    ///   ledger gap is the only thing ever rewarded.
+    ///
+    /// Pools that require a commitment lock should use the lock/unlock
+    /// `Position` system (`lock_assets`/`unlock_assets`) instead.
     pub fn stake(env: Env, from: Address, amount: i128) -> Result<(), PoolError> {
         from.require_auth();
         require_initialized(&env)?;
@@ -960,6 +999,12 @@ impl FarmingPool {
         Ok(())
     }
 
+    /// Withdraw the caller's entire flexible stake and bank the accrued credits.
+    ///
+    /// There is no minimum lock period (see `stake`); the caller may withdraw at
+    /// any time. Because credits accrue only over elapsed ledgers (#169), an
+    /// immediate stake→unstake round-trip earns no credits, so the lack of a
+    /// lock does not create a flash-staking reward.
     pub fn unstake(env: Env, from: Address) -> Result<i128, PoolError> {
         from.require_auth();
         require_initialized(&env)?;
@@ -1104,6 +1149,21 @@ impl FarmingPool {
 
     pub fn get_min_lock_period(env: Env) -> Result<u32, PoolError> {
         Self::min_lock_period(env)
+    }
+
+    /// Return the minimum lock period in seconds (assuming ~5s/ledger).
+    ///
+    /// The raw ledger count in `min_lock_period` is an implementation detail
+    /// that frontends and users cannot meaningfully display. This helper
+    /// converts it to a human-readable duration so UIs can show days/hours
+    /// directly. See #166.
+    pub fn min_lock_period_seconds(env: Env) -> Result<u64, PoolError> {
+        let ledgers = Self::min_lock_period(env)?;
+        Ok((ledgers as u64) * 5)
+    }
+
+    pub fn get_min_lock_period_seconds(env: Env) -> Result<u64, PoolError> {
+        Self::min_lock_period_seconds(env)
     }
 
     pub fn get_credits(env: Env, user: Address) -> Result<i128, PoolError> {

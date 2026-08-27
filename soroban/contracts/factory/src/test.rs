@@ -1122,6 +1122,34 @@ fn test_refresh_pool_ttls_restores_ttl_for_unqueried_pool() {
 }
 
 #[test]
+fn test_refresh_pool_ttls_stays_permissionless_for_any_caller() {
+    // #168: refresh_pool_ttls remains callable by anyone — the keep-alive
+    // mechanism must not be gated behind the admin, otherwise a factory whose
+    // only lifeline relies on a single admin becomes a single point of failure.
+    let t = setup_with_pool_records(3);
+    let stranger = Address::generate(&t.env);
+    // No admin auth provided at all: assert the refresh still succeeds.
+    assert_eq!(t.client.try_refresh_pool_ttls(&0u32, &3u32), Ok(Ok(())));
+    assert_eq!(
+        pool_record_ttl(&t.env, &t.factory_addr, 1),
+        TTL_EXTEND_TO,
+        "stranger-triggered keep-alive must still extend TTLs"
+    );
+    // Sanity: the stranger address is not the admin.
+    assert_ne!(t.client.admin(), stranger);
+}
+
+#[test]
+fn test_refresh_pool_ttls_requires_initialized_factory() {
+    // #168: an uninitialized factory has no registry to keep alive, so the
+    // permissionless refresh entry point must reject the call with a typed
+    // error rather than silently bumping instance state.
+    let (_env, client) = setup_uninitialized();
+    let result = client.try_refresh_pool_ttls(&0u32, &20u32);
+    assert!(matches!(result, Err(Ok(FactoryError::NotInitialized))));
+}
+
+#[test]
 fn test_create_pool_emits_pool_crtd_event_with_payload() {
     let t = setup();
     let asset = Address::generate(&t.env);

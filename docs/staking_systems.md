@@ -62,6 +62,17 @@ When unexpected market conditions or upgrades require pausing a pool (`pause()`)
 
 ---
 
+## 4a. Why the Boost/Stake system has no minimum lock period
+
+The flexible `UserStake` system deliberately does **not** enforce a lock period like the `Position` system does (`stake`/`unstake` vs `lock_assets`/`unlock_assets`). This is a documented design decision, not an oversight ([#169](https://github.com/SmartDropLabs/smartdrop-contracts/issues/169)):
+
+- **Different product purpose**: the lock system commits deposits for a minimum duration; the boost/stake system exists for *continuous flexible staking* where a lock would defeat its purpose.
+- **No leverage, no flash-staking reward**: a stake is not a loan — `unstake` returns only the exact staked principal. Credits accrue **linearly over elapsed ledgers** (`compute_stake_accrual`), with checkpoints on both `stake` and `unstake`, so an immediate stake→unstake round-trip banks ~0 credits. There is no fixed up-front reward to harvest.
+- **Bounded exposure**: the maximum "harm" of free stake/unstake is per-transaction gas, which the caller pays. The contract never over-commits liabilities beyond staked amounts.
+- **Guidance**: pools that need a commitment lock should rely on the `Position` system; pools that want flexible boosted staking use the stake system as-is. If a future product needs a locked *boosted* stake, add a separate opt-in `min_stake_lock_period` parameter rather than coupling the two model.
+
+---
+
 ## 5. Factory Registry & Scan Gas Economics
 
 The `Factory` contract manages pool deployments and provides query functions to locate pools by staking asset:

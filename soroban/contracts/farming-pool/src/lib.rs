@@ -316,7 +316,12 @@ impl FarmingPool {
         if credit_rate <= 0 || credit_rate > MAX_CREDIT_RATE {
             return Err(PoolError::InvalidCreditRate);
         }
-        if min_stake_amount <= 0 || min_stake_amount > MAX_STAKE_AMOUNT {
+        let min_stake = if min_stake_amount <= 0 {
+            1i128
+        } else {
+            min_stake_amount
+        };
+        if min_stake > MAX_STAKE_AMOUNT {
             return Err(PoolError::InvalidMinStakeAmount);
         }
 
@@ -335,7 +340,7 @@ impl FarmingPool {
             .set(&DataKey::MinLockPeriod, &min_lock_period);
         env.storage()
             .instance()
-            .set(&DataKey::MinStakeAmount, &min_stake_amount);
+            .set(&DataKey::MinStakeAmount, &min_stake);
         env.storage()
             .instance()
             .set(&DataKey::SchemaVersion, &SCHEMA_VERSION);
@@ -429,7 +434,6 @@ impl FarmingPool {
             }
         };
 
-        // token::TokenClient::new(&env, &get_stake_token(&env)).transfer(
         position.credit_rate = read_credit_rate(&env);
 
         // Checks-effects-interactions: persist state *before* the external
@@ -485,7 +489,6 @@ impl FarmingPool {
             set_position(&env, &user, &position);
         }
 
-        // token::TokenClient::new(&env, &get_stake_token(&env)).transfer(
         let stake_token = get_stake_token(&env)?;
         token::TokenClient::new(&env, &stake_token).transfer(
             &env.current_contract_address(),
@@ -546,10 +549,15 @@ impl FarmingPool {
         Ok(pool_is_paused(&env))
     }
 
+    /// Withdraw staked/locked tokens during emergency when pool is paused.
+    ///
+    /// Allows users to self-withdraw their assets during a pause without requiring
+    /// admin intervention. Requires authorization from `user`. Checkpoints and preserves
+    /// accrued credit totals in `BankedCredits`.
     pub fn emergency_withdraw(env: Env, user: Address) -> Result<i128, PoolError> {
+        user.require_auth();
         require_initialized(&env)?;
         let admin = get_admin(&env)?;
-        admin.require_auth();
         if !pool_is_paused(&env) {
             return Err(PoolError::NotPaused);
         }
@@ -601,7 +609,7 @@ impl FarmingPool {
 
     pub fn get_banked_credits(env: Env, user: Address) -> i128 {
         bump_instance(&env);
-        let totals = get_banked_credits_split(env, user).unwrap_or(BankedCreditTotals {
+        let totals = Self::get_banked_credits_split(env, user).unwrap_or(BankedCreditTotals {
             position_credits: 0,
             stake_credits: 0,
         });
@@ -757,7 +765,6 @@ impl FarmingPool {
         let total_credits = stake.credits_banked;
 
         // Return staked tokens to caller.
-        // token::TokenClient::new(&env, &get_stake_token(&env)).transfer(
         let stake_token = get_stake_token(&env)?;
         token::TokenClient::new(&env, &stake_token).transfer(
             &env.current_contract_address(),

@@ -300,6 +300,14 @@
                   },
                   {
                     "key": {
+                      "symbol": "multiplier"
+                    },
+                    "val": {
+                      "u32": 1
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "start_ledger"
                     },
                     "val": {
@@ -381,12 +389,36 @@
                       "key": {
                         "vec": [
                           {
+                            "symbol": "MinStakeAmount"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "i128": "100"
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
                             "symbol": "Paused"
                           }
                         ]
                       },
                       "val": {
                         "bool": false
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "SchemaVersion"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "u32": 1
                       }
                     },
                     {

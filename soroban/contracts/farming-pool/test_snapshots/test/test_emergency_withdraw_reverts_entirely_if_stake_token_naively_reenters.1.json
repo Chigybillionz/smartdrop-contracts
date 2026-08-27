@@ -182,6 +182,14 @@
                   },
                   {
                     "key": {
+                      "symbol": "multiplier"
+                    },
+                    "val": {
+                      "u32": 2
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "start_ledger"
                     },
                     "val": {
@@ -268,7 +276,7 @@
                         ]
                       },
                       "val": {
-                        "i128": "0"
+                        "i128": "1"
                       }
                     },
                     {

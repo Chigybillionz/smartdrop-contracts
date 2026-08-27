@@ -520,6 +520,39 @@ fn test_upgrade_pool_requires_factory_admin_auth() {
     assert!(result.is_err(), "only the factory admin may upgrade pools");
 }
 
+#[contract]
+struct NonUpgradableContract;
+
+#[contractimpl]
+impl NonUpgradableContract {
+    pub fn dummy(_env: Env) -> bool {
+        true
+    }
+}
+
+#[test]
+fn test_upgrade_pool_non_upgradable_pool_returns_pool_upgrade_failed() {
+    let t = setup();
+    let non_upgradable_addr = t.env.register(NonUpgradableContract, ());
+    let fake_record = PoolRecord {
+        address: non_upgradable_addr,
+        asset: Address::generate(&t.env),
+        credit_rate: 100,
+        global_multiplier: 1,
+        min_lock_period: 10,
+    };
+    t.env.as_contract(&t.factory_addr, || {
+        t.env
+            .storage()
+            .persistent()
+            .set(&DataKey::Pool(99), &fake_record);
+    });
+
+    let new_wasm_hash = upload_replacement_wasm(&t.env);
+    let result = t.client.try_upgrade_pool(&99u32, &new_wasm_hash);
+    assert_eq!(result, Err(Ok(FactoryError::PoolUpgradeFailed)));
+}
+
 // ── create_pool auth gate ─────────────────────────────────────────────────────
 
 #[test]
@@ -723,7 +756,7 @@ fn test_get_pools_by_asset_bounds_scan_for_sparse_matches() {
     let page = client.get_pools_by_asset(&sparse_asset, &0u32, &20u32);
 
     assert_eq!(page.records.len(), 0);
-    assert_eq!(page.next_start_id, 200);
+    assert_eq!(page.next_start_id, 50);
     assert_eq!(page.total, 500);
 }
 
@@ -771,6 +804,45 @@ fn test_get_pools_by_asset_can_page_sparse_matches_to_completion() {
     assert_eq!(found_ids.len(), 2);
     assert_eq!(found_ids.get(0), Some(250));
     assert_eq!(found_ids.get(1), Some(499));
+}
+
+#[test]
+fn test_get_pools_by_asset_range_custom_scan_limit() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let wasm_hash = upload_farming_pool_wasm(&env);
+    let factory_addr = env.register(Factory, ());
+    let client = FactoryClient::new(&env, &factory_addr);
+    client.initialize(&admin, &wasm_hash);
+
+    let sparse_asset = Address::generate(&env);
+    let other_asset = Address::generate(&env);
+    for i in 0..100 {
+        let asset = if i == 90 {
+            sparse_asset.clone()
+        } else {
+            other_asset.clone()
+        };
+        client.create_pool(
+            &asset,
+            &(1_728_000 + i as u128 * 17_280),
+            &2u32,
+            &(10 + i as u64),
+            &0i128,
+        );
+    }
+
+    // With a scan_limit of 50, first call should only scan 0..50
+    let page1 = client.get_pools_by_asset_range(&sparse_asset, &0u32, &50u32, &20u32);
+    assert_eq!(page1.records.len(), 0);
+    assert_eq!(page1.next_start_id, 50);
+
+    // Second call scanning 50..100 should find the match at 90
+    let page2 = client.get_pools_by_asset_range(&sparse_asset, &page1.next_start_id, &50u32, &20u32);
+    assert_eq!(page2.records.len(), 1);
+    assert_eq!(page2.records.get(0).unwrap().0, 90);
+    assert_eq!(page2.next_start_id, 100);
 }
 
 #[test]

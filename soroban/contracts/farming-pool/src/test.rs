@@ -561,8 +561,10 @@ fn test_admin_multiplier_change_applies_from_next_checkpoint() {
     // effective_stake = 1500 → 15000 banked.
     t.client.set_boost(&t.user, &50u32);
     t.client.set_global_multiplier(&3u32);
+    // User checkpoints to adopt the new global multiplier
+    t.client.set_boost(&t.user, &50u32);
     advance_ledgers(&t.env, 10);
-    // Next 10 ledgers: effective_stake = 2000 (50% @ 3×) → 20000
+    // Next 10 ledgers: effective_stake = 2000 (50% @ 3×) → 20000 -> total 35,000
     assert_eq!(t.client.get_credits(&t.user), 35_000);
 }
 
@@ -1458,7 +1460,7 @@ fn test_emergency_withdraw_while_paused() {
     assert_eq!(t.client.get_banked_credits(&t.user), 8_000);
     // Individual histories must not be merged into a single figure (#145): the
     // lock/unlock position and boost stake credits remain separately retrievable.
-    let split = t.client.get_banked_credits_split(&t.user).unwrap();
+    let split = t.client.get_banked_credits_split(&t.user);
     assert_eq!(split.position_credits, 5_000);
     assert_eq!(split.stake_credits, 3_000);
 }
@@ -1469,6 +1471,26 @@ fn test_emergency_withdraw_while_unpaused_returns_not_paused() {
     t.client.lock_assets(&t.user, &1_000);
     let result = t.client.try_emergency_withdraw(&t.user);
     assert!(matches!(result, Err(Ok(PoolError::NotPaused))));
+}
+
+#[test]
+fn test_emergency_withdraw_requires_user_auth() {
+    let (env, contract_id, client, _admin, user) = setup_without_mocked_auth();
+
+    // Attacker cannot withdraw user's funds without user's auth
+    let attacker = Address::generate(&env);
+    let unauth_result = client
+        .mock_auths(&[MockAuth {
+            address: &attacker,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "emergency_withdraw",
+                args: (&user,).into_val(&env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_emergency_withdraw(&user);
+    assert!(unauth_result.is_err(), "third party cannot trigger emergency withdraw without user auth");
 }
 
 // ── Whitelist system tests ───────────────────────────────────────────────────
@@ -1760,6 +1782,7 @@ fn seed_user_stake(env: &Env, contract_id: &Address, user: &Address, amount: i12
                 start_ledger: current,
                 credits_banked: 0,
                 credit_rate: read_credit_rate(env),
+                multiplier: read_global_multiplier(env),
             },
         );
     });

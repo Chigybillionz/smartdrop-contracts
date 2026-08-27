@@ -99,16 +99,16 @@ Emitted by `unpause`.
 * **Payload:** `()` — no data.
 
 ### `emrg_exit`
-Emitted by `emergency_withdraw` (admin-only, requires the pool to be paused).
+Emitted by `emergency_withdraw` (user-authorized, requires the pool to be paused).
 
 * **Topics:** `(Symbol, Symbol)` -> `(symbol_short!("pool"), symbol_short!("emrg_exit"))`
 * **Payload Structure (tuple order):**
 
 | Field | Rust Type | Description |
 | :--- | :--- | :--- |
-| `admin` | `Address` | The admin address that executed the emergency withdrawal. |
+| `admin` | `Address` | The pool admin address at the time of the emergency exit. |
 | `user` | `Address` | The user whose funds were returned. |
-| `total_returned` | `i128` | Combined amount returned across both the `Position` and legacy `UserStake` records. |
+| `total_returned` | `i128` | Combined amount returned across both the `Position` and `UserStake` records. |
 
 ### `adm_xfr`
 Emitted by `transfer_admin` when the pool admin is rotated.

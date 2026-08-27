@@ -10,8 +10,8 @@ use types::{DataKey, FactoryError, ListPoolsResponse, PoolRecord};
 // ~30 days at ~5 s/ledger; extend to ~60 days when below threshold.
 const TTL_THRESHOLD: u32 = 518_400;
 const TTL_EXTEND_TO: u32 = 1_036_800;
-// Bound the number of pool IDs examined per call.
-const MAX_POOL_SCAN_PER_CALL: u32 = 200;
+// Bound the number of pool IDs examined per call to stay within Soroban's 100 footprint entries limit.
+const MAX_POOL_SCAN_PER_CALL: u32 = 50;
 
 /// Ledgers per day at the network's ~5s/ledger target, used to convert
 /// `create_pool`'s caller-facing `daily_rate` into the pool's native
@@ -217,39 +217,34 @@ impl Factory {
         })
     }
 
-    /// Return a page of pool records whose staking asset matches `asset`.
+    /// Return a page of pool records whose staking asset matches `asset`, scanning up to `scan_limit` pool IDs.
     ///
-    /// Scans at most `MAX_POOL_SCAN_PER_CALL` pool IDs starting from `start_id`
-    /// and collects matching records from that bounded window. `limit` is capped
-    /// at 20 records so callers can page through large registries without
-    /// unbounded contract work. This prevents denial-of-service by design as the
-    /// registry grows organically.
+    /// Scans at most `scan_limit` (capped at `MAX_POOL_SCAN_PER_CALL` = 50) pool IDs starting from
+    /// `start_id` and collects matching records from that bounded window. `limit` is capped at 20
+    /// records so callers can page through large registries without unbounded contract work.
     ///
-    /// # Resource Limit Reasoning
-    /// Without a scan bound, this function would perform an unbounded O(n) walk
-    /// when matches are sparse or absent, because it would have to inspect the
-    /// entire registry to find up to 20 matching records. As pool_count grows,
-    /// the function gets strictly more expensive per call and would eventually
-    /// exceed Soroban's per-transaction CPU-instruction and read-entry budgets,
-    /// becoming permanently unusable. The scan window cap ensures each call only
-    /// examines a bounded number of pool IDs.
+    /// # Resource Limit & Gas Economics
+    /// Without a scan bound, asset-matching queries perform an unbounded O(n) walk across the registry,
+    /// inspecting every pool ID until `limit` matches are found or the registry is exhausted. As
+    /// `pool_count` scales to thousands of pools, sparse queries would exceed Soroban's per-transaction
+    /// footprint limits (100 entries) and CPU instruction budget. Bounding each call to at most 50 IDs
+    /// guarantees bounded predictable gas and CPU consumption per call.
     ///
-    /// Callers can resume from `next_start_id` to continue scanning the registry
-    /// in bounded chunks until `next_start_id == total`.
+    /// # Caller Range Scanning & Pagination
+    /// Callers can specify `scan_limit` (up to 50) to tune the scan window. Callers resume pagination
+    /// using `next_start_id` until `next_start_id == total`.
     ///
-    /// Guarded like `pool_count`: an empty result from an uninitialized factory
-    /// would be indistinguishable from "no pools hold this asset".
+    /// # Indexer Recommendation
+    /// For off-chain applications (such as frontends and analytics) requiring zero-gas instant lookups
+    /// across thousands of pools, developers should index the `(symbol_short!("factory"), symbol_short!("pool_crtd"))`
+    /// events emitted by `create_pool`, which include `asset` and `pool_id` in their payload.
     ///
     /// Returns `NotInitialized` if the factory has not been initialized.
-    /// # Secondary Index Consideration
-    /// For very large registries, a secondary per-asset index (e.g., DataKey::AssetPools
-    /// maintained incrementally in create_pool) would avoid even bounded scans across
-    /// many empty IDs. This would be a more robust long-term fix but requires changes
-    /// to create_pool's write path and potentially a migration/backfill for existing pools.
-    pub fn get_pools_by_asset(
+    pub fn get_pools_by_asset_range(
         env: Env,
         asset: Address,
         start_id: u32,
+        scan_limit: u32,
         limit: u32,
     ) -> Result<ListPoolsResponse, FactoryError> {
         require_initialized(&env)?;
@@ -260,7 +255,12 @@ impl Factory {
             .get(&DataKey::PoolCount)
             .unwrap_or(0);
         let capped_limit = limit.min(20);
-        let scan_end = start_id.saturating_add(MAX_POOL_SCAN_PER_CALL).min(count);
+        let effective_scan = if scan_limit == 0 {
+            MAX_POOL_SCAN_PER_CALL
+        } else {
+            scan_limit.min(MAX_POOL_SCAN_PER_CALL)
+        };
+        let scan_end = start_id.saturating_add(effective_scan).min(count);
         let mut records: Vec<(u32, PoolRecord)> = vec![&env];
         let mut next_start_id = scan_end;
 
@@ -283,6 +283,22 @@ impl Factory {
             next_start_id,
             total: count,
         })
+    }
+
+    /// Return a page of pool records whose staking asset matches `asset`.
+    ///
+    /// Scans at most `MAX_POOL_SCAN_PER_CALL` (50) pool IDs starting from `start_id`
+    /// and collects matching records from that bounded window. Equivalent to calling
+    /// `get_pools_by_asset_range(env, asset, start_id, MAX_POOL_SCAN_PER_CALL, limit)`.
+    ///
+    /// Returns `NotInitialized` if the factory has not been initialized.
+    pub fn get_pools_by_asset(
+        env: Env,
+        asset: Address,
+        start_id: u32,
+        limit: u32,
+    ) -> Result<ListPoolsResponse, FactoryError> {
+        Self::get_pools_by_asset_range(env, asset, start_id, MAX_POOL_SCAN_PER_CALL, limit)
     }
 
     /// Refresh TTLs for a range of pool records to prevent archival.
@@ -363,6 +379,10 @@ impl Factory {
     /// an opaque missing-authorization host trap, check the pool's current
     /// admin against the factory's admin up front and fail with a typed
     /// `PoolAdminMismatch` error when they no longer match.
+    ///
+    /// Furthermore, if the deployed pool does not support upgrades (e.g. an older
+    /// deployment lacking an `upgrade` entry point) or if invocation fails, `try_invoke_contract`
+    /// catches the failure and returns a typed `PoolUpgradeFailed` error instead of panicking.
     pub fn upgrade_pool(
         env: Env,
         pool_id: u32,
@@ -381,15 +401,29 @@ impl Factory {
         bump_pool(&env, pool_id);
 
         let pool_admin_args: Vec<Val> = vec![&env];
-        let pool_admin: Address =
-            env.invoke_contract(&record.address, &Symbol::new(&env, "admin"), pool_admin_args);
+        let pool_admin_res = env.try_invoke_contract::<Address, soroban_sdk::Error>(
+            &record.address,
+            &Symbol::new(&env, "admin"),
+            pool_admin_args,
+        );
+        let pool_admin = match pool_admin_res {
+            Ok(Ok(addr)) => addr,
+            _ => return Err(FactoryError::PoolUpgradeFailed),
+        };
         if pool_admin != admin {
             return Err(FactoryError::PoolAdminMismatch);
         }
 
         let upgrade_args: Vec<Val> = vec![&env, new_wasm_hash.clone().into_val(&env)];
-        let _: () =
-            env.invoke_contract(&record.address, &Symbol::new(&env, "upgrade"), upgrade_args);
+        let upgrade_res = env.try_invoke_contract::<(), soroban_sdk::Error>(
+            &record.address,
+            &Symbol::new(&env, "upgrade"),
+            upgrade_args,
+        );
+        match upgrade_res {
+            Ok(Ok(())) => {}
+            _ => return Err(FactoryError::PoolUpgradeFailed),
+        }
 
         #[allow(deprecated)]
         env.events().publish(
@@ -483,6 +517,12 @@ impl Factory {
             .with_current_contract(salt)
             .deploy_v2(wasm_hash, ());
 
+        let effective_min_stake = if min_stake_amount <= 0 {
+            1i128
+        } else {
+            min_stake_amount
+        };
+
         // Call the freshly deployed pool's `initialize` directly via
         // `invoke_contract` rather than depending on the `farming-pool`
         // crate's generated Client: pulling that crate in as a normal
@@ -496,7 +536,7 @@ impl Factory {
             global_multiplier.into_val(&env),
             credit_rate.into_val(&env),
             min_lock_period.into_val(&env),
-            min_stake_amount.into_val(&env),
+            effective_min_stake.into_val(&env),
         ];
         let _: () = env.invoke_contract(&pool_address, &Symbol::new(&env, "initialize"), init_args);
 

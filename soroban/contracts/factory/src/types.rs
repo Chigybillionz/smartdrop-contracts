@@ -85,4 +85,7 @@ pub enum FactoryError {
     /// matches the factory's current admin (the two diverge once either side
     /// calls its own `transfer_admin` independently — see `upgrade_pool`'s docs).
     PoolAdminMismatch = 9,
+    /// `upgrade_pool` failed because the target pool does not support upgrades
+    /// (e.g. older deployment without upgrade/admin entry points) or the upgrade call failed.
+    PoolUpgradeFailed = 10,
 }

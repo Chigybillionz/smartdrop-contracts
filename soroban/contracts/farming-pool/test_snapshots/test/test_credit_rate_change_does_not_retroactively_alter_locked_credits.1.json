@@ -124,7 +124,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "i128": "1"
+                  "i128": "100"
                 }
               ]
             }
@@ -143,7 +143,7 @@
                       "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
                     },
                     {
-                      "i128": "1"
+                      "i128": "100"
                     }
                   ]
                 }
@@ -312,7 +312,7 @@
                       "symbol": "amount"
                     },
                     "val": {
-                      "i128": "1001"
+                      "i128": "1100"
                     }
                   },
                   {
@@ -430,6 +430,30 @@
                       "key": {
                         "vec": [
                           {
+                            "symbol": "MinStakeAmount"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "i128": "100"
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "SchemaVersion"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "u32": 1
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
                             "symbol": "StakeToken"
                           }
                         ]
@@ -472,7 +496,7 @@
                       "symbol": "amount"
                     },
                     "val": {
-                      "i128": "999998999"
+                      "i128": "999998900"
                     }
                   },
                   {
@@ -524,7 +548,7 @@
                       "symbol": "amount"
                     },
                     "val": {
-                      "i128": "1001"
+                      "i128": "1100"
                     }
                   },
                   {

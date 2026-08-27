@@ -367,6 +367,28 @@ fn compute_stake_accrual(
     )
 }
 
+/// Snapshot the user's current credit accrual and adopt the latest global
+/// multiplier and credit rate.
+///
+/// This is called internally by `stake`, `unstake`, and `set_boost` to
+/// freeze the user's accrued credits under the *old* rate/multiplier before
+/// switching them to the *current* values for future accrual.
+///
+/// # Design trade-off: rate changes between checkpoints
+///
+/// `credit_rate` and `global_multiplier` are global parameters that can be
+/// changed by the admin at any time (via `set_credit_rate` /
+/// `set_global_multiplier`). Because each user's snapshot is only updated
+/// when *they* trigger a checkpoint (stake, unstake, or set_boost), users
+/// who checkpoint less frequently may earn credits at a different effective
+/// rate than those who checkpoint more often during a rate change window.
+///
+/// This is an intentional design choice: it keeps credit accrual fully
+/// local to each user's storage entry (no shared counter to synchronise),
+/// avoids front-running concerns around rate changes, and ensures that the
+/// cost of a rate change is O(1) rather than O(n) in the number of users.
+/// Integrators should be aware that a user's on-chain credit balance may
+/// temporarily reflect an outdated rate until their next checkpoint.
 fn checkpoint(env: &Env, user: &Address, stake: &mut UserStake) {
     let current = env.ledger().sequence();
     stake.credits_banked += compute_stake_accrual(env, user, stake, current);

@@ -101,4 +101,5 @@ pub enum DataKey {
     Whitelisted(Address),
     MinStakeAmount,
     TotalStaked,
+    TotalCredits,
 }

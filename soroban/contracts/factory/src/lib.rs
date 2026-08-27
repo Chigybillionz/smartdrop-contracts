@@ -60,6 +60,14 @@ fn bump_pool(env: &Env, pool_id: u32) {
         .extend_ttl(&DataKey::Pool(pool_id), TTL_THRESHOLD, TTL_EXTEND_TO);
 }
 
+fn bump_asset_pools(env: &Env, asset: &Address) {
+    env.storage().persistent().extend_ttl(
+        &DataKey::AssetPools(asset.clone()),
+        TTL_THRESHOLD,
+        TTL_EXTEND_TO,
+    );
+}
+
 /// Reject any call that lands on a factory whose state was never seeded.
 ///
 /// `initialize` is the only writer of `DataKey::Admin`, so its presence is the
@@ -343,6 +351,34 @@ impl Factory {
         let scan_end = start_id.saturating_add(effective_scan).min(count);
         let mut records: Vec<(u32, PoolRecord)> = vec![&env];
         let mut next_start_id = scan_end;
+
+        let asset_key = DataKey::AssetPools(asset.clone());
+        if let Some(asset_ids) = env.storage().persistent().get::<DataKey, Vec<u32>>(&asset_key) {
+            bump_asset_pools(&env, &asset);
+            for pool_id in asset_ids.iter() {
+                if pool_id < start_id {
+                    continue;
+                }
+                if pool_id >= scan_end {
+                    next_start_id = scan_end;
+                    break;
+                }
+                if records.len() >= capped_limit {
+                    next_start_id = pool_id;
+                    break;
+                }
+                let key = DataKey::Pool(pool_id);
+                if let Some(record) = env.storage().persistent().get::<DataKey, PoolRecord>(&key) {
+                    bump_pool(&env, pool_id);
+                    records.push_back((pool_id, record));
+                }
+            }
+            return Ok(ListPoolsResponse {
+                records,
+                next_start_id,
+                total: count,
+            });
+        }
 
         for pool_id in start_id..scan_end {
             if records.len() >= capped_limit {
@@ -640,6 +676,15 @@ impl Factory {
             .persistent()
             .set(&DataKey::Pool(pool_id), &record);
         bump_pool(&env, pool_id);
+        let asset_key = DataKey::AssetPools(asset.clone());
+        let mut asset_pool_ids: Vec<u32> = env
+            .storage()
+            .persistent()
+            .get(&asset_key)
+            .unwrap_or_else(|| vec![&env]);
+        asset_pool_ids.push_back(pool_id);
+        env.storage().persistent().set(&asset_key, &asset_pool_ids);
+        bump_asset_pools(&env, &asset);
         env.storage()
             .instance()
             .set(&DataKey::PoolCount, &next_count);

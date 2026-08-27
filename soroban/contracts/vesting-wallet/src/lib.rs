@@ -282,7 +282,7 @@ impl VestingWallet {
         #[allow(deprecated)]
         env.events().publish(
             (symbol_short!("vest"), symbol_short!("revoked")),
-            (admin, vested, unvested),
+            (admin, get_beneficiary(&env), vested, unvested),
         );
 
         Ok(())

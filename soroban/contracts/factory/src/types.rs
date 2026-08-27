@@ -11,6 +11,8 @@ pub enum DataKey {
     WasmHash,
     /// Per-pool record keyed by monotonically assigned pool ID.
     Pool(u32),
+    /// Cached pool IDs for each staking asset to speed repeated asset lookups.
+    AssetPools(Address),
 }
 
 /// On-chain record for a registered farming pool.

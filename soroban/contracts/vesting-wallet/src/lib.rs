@@ -282,6 +282,23 @@ impl VestingWallet {
         Ok(compute_vested(&env) - get_released(&env))
     }
 
+    /// Transfer beneficiary rights to `new_beneficiary`. Admin must authorise.
+    pub fn transfer_beneficiary(
+        env: Env,
+        new_beneficiary: Address,
+    ) -> Result<(), VestingError> {
+        require_initialized(&env)?;
+        let admin = get_admin(&env);
+        admin.require_auth();
+        bump_instance(&env);
+
+        env.storage()
+            .instance()
+            .set(&DataKey::Beneficiary, &new_beneficiary);
+
+        Ok(())
+    }
+
     /// Transfer admin rights to `new_admin`. Current admin must authorise.
     pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), VestingError> {
         require_initialized(&env)?;

@@ -484,6 +484,15 @@ impl FarmingPool {
 
         // Checks-Effects-Interactions: persist state before token transfer (#70).
         if position.amount == 0 {
+            let banked = Self::get_banked_credits_split(env.clone(), user.clone())?;
+            set_banked_credits(
+                &env,
+                &user,
+                BankedCreditTotals {
+                    position_credits: banked.position_credits + total_credits,
+                    stake_credits: banked.stake_credits,
+                },
+            );
             remove_position(&env, &user);
         } else {
             set_position(&env, &user, &position);
@@ -777,10 +786,10 @@ impl FarmingPool {
     }
 
     pub fn set_boost(env: Env, user: Address, allocation_pct: u32) -> Result<(), PoolError> {
-        user.require_auth();
         require_not_paused(&env)?;
 
         require_initialized(&env)?;
+        get_admin(&env)?.require_auth();
         assert!(
             (1..=100).contains(&allocation_pct),
             "allocation_pct must be 1-100"
@@ -895,21 +904,35 @@ impl FarmingPool {
     pub fn get_credits(env: Env, user: Address) -> Result<i128, PoolError> {
         require_initialized(&env)?;
         bump_instance(&env);
-        let Some(stake) = get_user_stake(&env, &user) else {
-            return Ok(0);
-        };
+        let banked = Self::get_banked_credits_split(env.clone(), user.clone())?;
 
-        let allocation_pct = get_user_boost(&env, &user).unwrap_or(0);
-        let multiplier = stake.multiplier;
-        let elapsed = env.ledger().sequence().saturating_sub(stake.start_ledger);
-        Ok(stake.credits_banked
-            + compute_credits(
-                stake.amount,
-                allocation_pct,
-                multiplier,
-                stake.credit_rate,
-                elapsed,
-            ))
+        let position_credits = get_position(&env, &user)
+            .map(|position| {
+                let elapsed = env
+                    .ledger()
+                    .sequence()
+                    .saturating_sub(position.checkpoint_ledger);
+                position.total_credits
+                    + position.amount * position.credit_rate * elapsed as i128
+            })
+            .unwrap_or(0);
+
+        let stake_credits = get_user_stake(&env, &user)
+            .map(|stake| {
+                let allocation_pct = get_user_boost(&env, &user).unwrap_or(0);
+                let elapsed = env.ledger().sequence().saturating_sub(stake.start_ledger);
+                stake.credits_banked
+                    + compute_credits(
+                        stake.amount,
+                        allocation_pct,
+                        stake.multiplier,
+                        stake.credit_rate,
+                        elapsed,
+                    )
+            })
+            .unwrap_or(0);
+
+        Ok(banked.position_credits + banked.stake_credits + position_credits + stake_credits)
     }
 
     pub fn set_min_stake_amount(env: Env, amount: i128) -> Result<(), PoolError> {

@@ -192,6 +192,30 @@ fn remove_user_stake(env: &Env, user: &Address) {
         .remove(&DataKey::UserStake(user.clone()));
 }
 
+fn add_total_staked(env: &Env, amount: i128) {
+    let total = env
+        .storage()
+        .instance()
+        .get::<DataKey, i128>(&DataKey::TotalStaked)
+        .unwrap_or(0);
+    env.storage().instance().set(
+        &DataKey::TotalStaked,
+        &total.checked_add(amount).expect("total stake overflow"),
+    );
+}
+
+fn subtract_total_staked(env: &Env, amount: i128) {
+    let total = env
+        .storage()
+        .instance()
+        .get::<DataKey, i128>(&DataKey::TotalStaked)
+        .unwrap_or(0);
+    env.storage().instance().set(
+        &DataKey::TotalStaked,
+        &total.checked_sub(amount).expect("total stake underflow"),
+    );
+}
+
 fn set_banked_credits(env: &Env, user: &Address, totals: BankedCreditTotals) {
     let key = DataKey::BankedCredits(user.clone());
     env.storage().persistent().set(&key, &totals);
@@ -341,6 +365,7 @@ impl FarmingPool {
         env.storage()
             .instance()
             .set(&DataKey::MinStakeAmount, &min_stake);
+        env.storage().instance().set(&DataKey::TotalStaked, &0i128);
         env.storage()
             .instance()
             .set(&DataKey::SchemaVersion, &SCHEMA_VERSION);
@@ -446,6 +471,7 @@ impl FarmingPool {
         // rolled back with it — Soroban's per-invocation atomicity, not
         // manual sequencing, is what keeps this safe on failure. See #69.
         set_position(&env, &user, &position);
+        add_total_staked(&env, amount);
 
         let stake_token = get_stake_token(&env)?;
         token::TokenClient::new(&env, &stake_token).transfer(
@@ -497,6 +523,7 @@ impl FarmingPool {
         } else {
             set_position(&env, &user, &position);
         }
+        subtract_total_staked(&env, amount);
 
         let stake_token = get_stake_token(&env)?;
         token::TokenClient::new(&env, &stake_token).transfer(
@@ -581,6 +608,7 @@ impl FarmingPool {
         if let Some(position) = get_position(&env, &user) {
             token.transfer(&env.current_contract_address(), &user, &position.amount);
             total_returned += position.amount;
+            subtract_total_staked(&env, position.amount);
             position_credits = position.total_credits;
             remove_position(&env, &user);
         }
@@ -588,6 +616,7 @@ impl FarmingPool {
         if let Some(stake) = get_user_stake(&env, &user) {
             token.transfer(&env.current_contract_address(), &user, &stake.amount);
             total_returned += stake.amount;
+            subtract_total_staked(&env, stake.amount);
             stake_credits = stake.credits_banked;
             remove_user_stake(&env, &user);
         }
@@ -750,6 +779,7 @@ impl FarmingPool {
         // Checks-effects-interactions: persist state *before* the external
         // token transfer below, consistent with `lock_assets`. See #69.
         set_user_stake(&env, &from, &new_stake);
+        add_total_staked(&env, amount);
 
         // Pull tokens from caller into the contract.
         let stake_token = get_stake_token(&env)?;
@@ -757,6 +787,11 @@ impl FarmingPool {
             &from,
             env.current_contract_address(),
             &amount,
+        );
+
+        env.events().publish(
+            (symbol_short!("pool"), symbol_short!("staked")),
+            (from, amount),
         );
 
         Ok(())
@@ -782,6 +817,7 @@ impl FarmingPool {
         );
 
         remove_user_stake(&env, &from);
+        subtract_total_staked(&env, stake.amount);
         Ok(total_credits)
     }
 
@@ -976,6 +1012,16 @@ impl FarmingPool {
         require_initialized(&env)?;
         bump_instance(&env);
         Ok(get_user_stake(&env, &user))
+    }
+
+    pub fn total_staked(env: Env) -> Result<i128, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(env
+            .storage()
+            .instance()
+            .get(&DataKey::TotalStaked)
+            .unwrap_or(0))
     }
 }
 

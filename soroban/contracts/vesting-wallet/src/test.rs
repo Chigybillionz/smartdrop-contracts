@@ -12,7 +12,9 @@ use soroban_sdk::{
 struct TestEnv {
     env: Env,
     client: VestingWalletClient<'static>,
+    contract_id: Address,
     token: TokenClient<'static>,
+    token_address: Address,
     admin: Address,
     beneficiary: Address,
     /// Ledger sequence at test setup time (used for computing schedule offsets).
@@ -68,7 +70,9 @@ fn setup_schedule(cliff_offset: u32, period: u32, total: i128, revocable: bool) 
     TestEnv {
         env,
         client,
+        contract_id,
         token,
+        token_address: asset.address(),
         admin,
         beneficiary,
         start,
@@ -104,6 +108,34 @@ fn test_double_initialize_returns_error() {
         &another_admin,
     );
     assert!(matches!(result, Err(Ok(VestingError::AlreadyInitialized))));
+}
+
+#[test]
+fn test_initialize_emits_event() {
+    let t = setup(0, 100, 1_000);
+
+    assert_eq!(
+        t.env.events().all().filter_by_contract(&t.contract_id),
+        soroban_sdk::vec![
+            &t.env,
+            (
+                t.contract_id.clone(),
+                soroban_sdk::vec![
+                    &t.env,
+                    soroban_sdk::symbol_short!("vest").into_val(&t.env),
+                    soroban_sdk::symbol_short!("init").into_val(&t.env),
+                ],
+                (
+                    t.beneficiary.clone(),
+                    t.token_address.clone(),
+                    1_000i128,
+                    t.start,
+                    t.start + 100,
+                )
+                    .into_val(&t.env),
+            )
+        ]
+    );
 }
 
 // ── vested_amount / releasable tests ─────────────────────────────────────────

@@ -176,6 +176,11 @@ impl VestingWallet {
             &total_amount,
         );
 
+        env.events().publish(
+            (symbol_short!("vest"), symbol_short!("init")),
+            (beneficiary, token, total_amount, start_ledger, end_ledger),
+        );
+
         bump_instance(&env);
         Ok(())
     }

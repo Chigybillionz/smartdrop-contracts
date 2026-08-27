@@ -163,6 +163,48 @@ fn test_stake_uninitialized_returns_not_initialized() {
 }
 
 #[test]
+fn test_stake_emits_event() {
+    let t = setup(2, 1);
+    let amount = 1_000i128;
+
+    t.client.stake(&t.user, &amount);
+
+    assert_eq!(
+        t.env.events().all().filter_by_contract(&t.contract_id),
+        soroban_sdk::vec![
+            &t.env,
+            (
+                t.contract_id.clone(),
+                soroban_sdk::vec![
+                    &t.env,
+                    soroban_sdk::symbol_short!("pool").into_val(&t.env),
+                    soroban_sdk::symbol_short!("staked").into_val(&t.env)
+                ],
+                (t.user.clone(), amount).into_val(&t.env),
+            )
+        ]
+    );
+}
+
+#[test]
+fn test_total_staked_tracks_locked_and_flexible_positions() {
+    let t = setup(2, 1);
+
+    assert_eq!(t.client.total_staked(), 0);
+    t.client.stake(&t.user, &1_000);
+    assert_eq!(t.client.total_staked(), 1_000);
+
+    t.client.lock_assets(&t.user, &500);
+    assert_eq!(t.client.total_staked(), 1_500);
+
+    t.client.unstake(&t.user);
+    assert_eq!(t.client.total_staked(), 500);
+
+    t.client.unlock_assets(&t.user, &500);
+    assert_eq!(t.client.total_staked(), 0);
+}
+
+#[test]
 fn test_pause_uninitialized_returns_not_initialized() {
     let (_env, client, _user) = setup_uninitialized();
     match client.try_pause() {

@@ -17,6 +17,9 @@ const MAX_POOL_SCAN_PER_CALL: u32 = 50;
 /// `create_pool`'s caller-facing `daily_rate` into the pool's native
 /// per-ledger `credit_rate`. See `daily_rate_to_credit_rate`.
 const LEDGERS_PER_DAY: u128 = 17_280;
+// Minimum stake in the asset's smallest units. This is 0.1 token for the
+// standard 7-decimal Stellar asset convention and prevents dust positions.
+const MIN_STAKE_AMOUNT: i128 = 1_000_000;
 
 /// Convert a "credits per day" figure into the deployed pool's native
 /// "credits per ledger" `credit_rate`.
@@ -584,6 +587,14 @@ impl Factory {
         let min_lock_period: u32 = min_lock_period
             .try_into()
             .map_err(|_| FactoryError::MinLockPeriodOutOfRange)?;
+        let effective_min_stake = if min_stake_amount <= 0 {
+            MIN_STAKE_AMOUNT
+        } else {
+            min_stake_amount
+        };
+        if effective_min_stake < MIN_STAKE_AMOUNT {
+            return Err(FactoryError::InvalidMinStakeAmount);
+        }
 
         let pool_id: u32 = env.storage().instance().get(&DataKey::PoolCount).unwrap();
         let next_count = pool_id
@@ -598,12 +609,6 @@ impl Factory {
             .deployer()
             .with_current_contract(salt)
             .deploy_v2(wasm_hash, ());
-
-        let effective_min_stake = if min_stake_amount <= 0 {
-            1i128
-        } else {
-            min_stake_amount
-        };
 
         // Call the freshly deployed pool's `initialize` directly via
         // `invoke_contract` rather than depending on the `farming-pool`

@@ -14,6 +14,7 @@ struct TestEnv {
     client: VestingWalletClient<'static>,
     contract_id: Address,
     token: TokenClient<'static>,
+    token_address: Address,
     admin: Address,
     beneficiary: Address,
     /// Ledger sequence at test setup time (used for computing schedule offsets).
@@ -71,6 +72,7 @@ fn setup_schedule(cliff_offset: u32, period: u32, total: i128, revocable: bool) 
         client,
         contract_id,
         token,
+        token_address: asset.address(),
         admin,
         beneficiary,
         start,

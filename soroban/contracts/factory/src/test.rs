@@ -1005,6 +1005,19 @@ fn test_create_pool_rejects_zero_daily_rate() {
 }
 
 #[test]
+fn test_create_pool_rejects_dust_minimum_stake() {
+    let t = setup();
+    let asset = Address::generate(&t.env);
+
+    let result = t
+        .client
+        .try_create_pool(&asset, &1_728_000u128, &2u32, &25u64, &1i128);
+
+    assert_eq!(result, Err(Ok(FactoryError::InvalidMinStakeAmount)));
+    assert_eq!(t.client.pool_count(), 0);
+}
+
+#[test]
 fn test_create_pool_accepts_daily_rate_below_ledgers_per_day_with_ceiling_rounding() {
     let t = setup();
     let asset = Address::generate(&t.env);

@@ -1454,8 +1454,13 @@ fn test_emergency_withdraw_while_paused() {
         t.client.get_stake(&t.user).is_none(),
         "stake should be cleared"
     );
-    // 5_000 (lock credits) + 3_000 (stake credits) preserved.
+    // 5_000 (lock credits) + 3_000 (stake credits) preserved as a combined total.
     assert_eq!(t.client.get_banked_credits(&t.user), 8_000);
+    // Individual histories must not be merged into a single figure (#145): the
+    // lock/unlock position and boost stake credits remain separately retrievable.
+    let split = t.client.get_banked_credits_split(&t.user).unwrap();
+    assert_eq!(split.position_credits, 5_000);
+    assert_eq!(split.stake_credits, 3_000);
 }
 
 #[test]

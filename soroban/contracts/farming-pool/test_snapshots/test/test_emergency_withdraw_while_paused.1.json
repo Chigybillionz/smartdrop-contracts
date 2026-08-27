@@ -470,7 +470,24 @@
               },
               "durability": "persistent",
               "val": {
-                "i128": "8000"
+                "map": [
+                  {
+                    "key": {
+                      "symbol": "position_credits"
+                    },
+                    "val": {
+                      "i128": "5000"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "stake_credits"
+                    },
+                    "val": {
+                      "i128": "3000"
+                    }
+                  }
+                ]
               }
             }
           },

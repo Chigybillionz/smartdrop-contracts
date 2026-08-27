@@ -353,16 +353,65 @@ impl FarmingPool {
         get_admin(&env)
     }
 
-    /// Admin: transfer admin rights to `new_admin`. Current admin must authorise.
+    /// Propose an admin handoff. The proposed admin must separately call
+    /// `accept_admin` and authorise the call before the handoff completes.
     ///
-    /// Supports key rotation and governance handoffs without redeploying the pool.
+    /// Proposing the current admin cancels any pending handoff. A new proposal
+    /// also overwrites an existing pending handoff.
+    /// Emits `("pool", "adm_prop")` with `(current_admin, proposed_admin)`.
+    pub fn propose_admin(env: Env, new_admin: Address) -> Result<(), PoolError> {
+        let current = get_admin(&env)?;
+        current.require_auth();
+        bump_instance(&env);
+
+        if new_admin == current {
+            env.storage().instance().remove(&DataKey::PendingAdmin);
+        } else {
+            env.storage()
+                .instance()
+                .set(&DataKey::PendingAdmin, &new_admin);
+        }
+        env.events().publish(
+            (symbol_short!("pool"), symbol_short!("adm_prop")),
+            (current, new_admin),
+        );
+        Ok(())
+    }
+
+    /// Accept the pending admin handoff. Only the proposed admin can authorise.
+    pub fn accept_admin(env: Env) -> Result<(), PoolError> {
+        require_initialized(&env)?;
+        let pending: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingAdmin)
+            .ok_or(PoolError::NoPendingAdmin)?;
+        pending.require_auth();
+        let current = get_admin(&env)?;
+        bump_instance(&env);
+
+        env.storage().instance().set(&DataKey::Admin, &pending);
+        env.storage().instance().remove(&DataKey::PendingAdmin);
+        env.events().publish(
+            (symbol_short!("pool"), symbol_short!("adm_xfr")),
+            (current, pending),
+        );
+        Ok(())
+    }
+
+    /// Admin: transfer admin rights to `new_admin` in one step.
+    ///
+    /// Deprecated: use `propose_admin` followed by `accept_admin` so the new
+    /// admin must prove control of its address before the handoff completes.
     /// Emits a `("pool", "adm_xfr")` event with `(old_admin, new_admin)`.
+    #[deprecated(note = "use propose_admin followed by accept_admin")]
     pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), PoolError> {
         let current = get_admin(&env)?;
         current.require_auth();
         bump_instance(&env);
 
         env.storage().instance().set(&DataKey::Admin, &new_admin);
+        env.storage().instance().remove(&DataKey::PendingAdmin);
         env.events().publish(
             (symbol_short!("pool"), symbol_short!("adm_xfr")),
             (current, new_admin),
@@ -401,6 +450,9 @@ impl FarmingPool {
         Ok(())
     }
 
+    /// Lock assets for the minimum lock period. A top-up checkpoints the
+    /// existing position and extends its whole-position unlock ledger to the
+    /// later of the existing unlock ledger and a fresh period from this call.
     pub fn lock_assets(env: Env, user: Address, amount: i128) -> Result<(), PoolError> {
         user.require_auth();
         require_initialized(&env)?;
@@ -422,6 +474,8 @@ impl FarmingPool {
         let mut position = if let Some(mut existing) = get_position(&env, &user) {
             checkpoint_position(&env, &mut existing);
             existing.amount += amount;
+            let fresh_unlock = current.saturating_add(read_min_lock_period(&env));
+            existing.unlock_ledger = existing.unlock_ledger.max(fresh_unlock);
             existing
         } else {
             Position {

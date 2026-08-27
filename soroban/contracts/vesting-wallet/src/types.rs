@@ -9,6 +9,8 @@ pub enum VestingError {
     NotRevocable = 3,
     AlreadyRevoked = 4,
     Unauthorized = 5,
+    TotalAmountTooLarge = 6,
+    ArithmeticOverflow = 7,
 }
 
 /// Storage keys for all instance data in the vesting wallet.

@@ -651,6 +651,10 @@ impl FarmingPool {
         Ok(())
     }
 
+    /// Calculate current accrued credits specifically for the time-locked `Position` staking system.
+    ///
+    /// See also `get_position_credits` (an explicit alias for this function) and `get_credits`
+    /// (which calculates combined credits across both `Position` and `UserStake` systems).
     pub fn calculate_credits(env: Env, user: Address) -> Result<i128, PoolError> {
         require_initialized(&env)?;
         bump_instance(&env);
@@ -663,6 +667,13 @@ impl FarmingPool {
             .sequence()
             .saturating_sub(position.checkpoint_ledger);
         Ok(position.total_credits + position.amount * position.credit_rate * elapsed as i128)
+    }
+
+    /// Return current accrued credits for a user's time-locked `Position`.
+    ///
+    /// Alias for `calculate_credits` providing explicit system-specific naming.
+    pub fn get_position_credits(env: Env, user: Address) -> Result<i128, PoolError> {
+        Self::calculate_credits(env, user)
     }
 
     pub fn get_user_position(env: Env, user: Address) -> Result<Option<Position>, PoolError> {
@@ -751,9 +762,22 @@ impl FarmingPool {
 
     /// Withdraw staked/locked tokens during emergency when pool is paused.
     ///
-    /// Allows users to self-withdraw their assets during a pause without requiring
-    /// admin intervention. Requires authorization from `user`. Checkpoints and preserves
-    /// accrued credit totals in `BankedCredits`.
+    /// Allows users to withdraw their staked/locked assets during an emergency pause.
+    /// Requires authorization from `user`. Checkpoints and preserves accrued credit
+    /// totals in `BankedCredits`.
+    ///
+    /// # Usage & Operational Guidelines
+    /// - **When to Use**: Called during emergency situations or protocol maintenance when
+    ///   the contract has been explicitly paused via `pause()`.
+    /// - **Credit Preservation**: Staked/locked assets are returned in full while accrued
+    ///   credits are safely preserved in `BankedCredits` split between `position_credits`
+    ///   and `stake_credits` (see `get_banked_credits_split`). Users do not forfeit earned credits.
+    /// - **User Notification & Off-Chain Tracking**: Every emergency withdrawal emits an
+    ///   on-chain `("pool", "emrg_exit")` event with payload `(admin, user, total_returned)`.
+    ///   Indexers and frontends notify users of emergency exit transactions by monitoring this topic.
+    /// - **Audit Requirements & Privilege Governance**: Because emergency mechanisms handle pool
+    ///   assets during security pauses, all admin actions initiating pauses and emergency exits must
+    ///   be logged to immutable audit trails and governed by multi-sig or timelock controls.
     pub fn emergency_withdraw(env: Env, user: Address) -> Result<i128, PoolError> {
         user.require_auth();
         require_initialized(&env)?;
@@ -1166,6 +1190,29 @@ impl FarmingPool {
         Self::min_lock_period_seconds(env)
     }
 
+    /// Return current accrued credits specifically for a user's `UserStake` (boost/continuous staking system).
+    ///
+    /// Includes both live accrual for the active stake and banked stake credits from previous withdrawals.
+    pub fn get_stake_credits(env: Env, user: Address) -> Result<i128, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        let banked = Self::get_banked_credits_split(env.clone(), user.clone())?;
+
+        let stake_credits = get_user_stake(&env, &user)
+            .map(|stake| {
+                stake.credits_banked
+                    + compute_stake_accrual(&env, &user, &stake, env.ledger().sequence())
+            })
+            .unwrap_or(0);
+
+        Ok(banked.stake_credits + stake_credits)
+    }
+
+    /// Return total combined accrued credits for `user` across all staking systems.
+    ///
+    /// Merges credits from time-locked `Position` staking, flexible `UserStake` boost staking,
+    /// and prior `BankedCredits`. To query individual systems, see `get_position_credits`
+    /// (`calculate_credits`) and `get_stake_credits`.
     pub fn get_credits(env: Env, user: Address) -> Result<i128, PoolError> {
         require_initialized(&env)?;
         bump_instance(&env);

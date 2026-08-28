@@ -3,7 +3,8 @@
 mod types;
 
 use soroban_sdk::{
-    contract, contractimpl, symbol_short, vec, Address, BytesN, Env, IntoVal, Symbol, Val, Vec,
+    contract, contractimpl, symbol_short, vec, Address, BytesN, Env, IntoVal, String, Symbol, Val,
+    Vec,
 };
 use types::{DataKey, FactoryError, ListPoolsResponse, PoolRecord, PoolSort};
 
@@ -20,6 +21,8 @@ const LEDGERS_PER_DAY: u128 = 17_280;
 // Minimum stake in the asset's smallest units. This is 0.1 token for the
 // standard 7-decimal Stellar asset convention and prevents dust positions.
 const MIN_STAKE_AMOUNT: i128 = 1_000_000;
+// Minimum lock period in ledgers required to prevent flash-loan-style attacks.
+const MIN_LOCK_PERIOD: u32 = 1;
 
 /// Convert a "credits per day" figure into the deployed pool's native
 /// "credits per ledger" `credit_rate`.
@@ -60,6 +63,14 @@ fn bump_pool(env: &Env, pool_id: u32) {
         .extend_ttl(&DataKey::Pool(pool_id), TTL_THRESHOLD, TTL_EXTEND_TO);
 }
 
+fn bump_asset_pools(env: &Env, asset: &Address) {
+    env.storage().persistent().extend_ttl(
+        &DataKey::AssetPools(asset.clone()),
+        TTL_THRESHOLD,
+        TTL_EXTEND_TO,
+    );
+}
+
 /// Reject any call that lands on a factory whose state was never seeded.
 ///
 /// `initialize` is the only writer of `DataKey::Admin`, so its presence is the
@@ -91,6 +102,14 @@ fn load_wasm_hash(env: &Env) -> Result<BytesN<32>, FactoryError> {
         .ok_or(FactoryError::NotInitialized)
 }
 
+/// Read the running count of successful `upgrade_pool` calls (#258).
+fn read_upgrade_count(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::UpgradeCount)
+        .unwrap_or(0)
+}
+
 /// Build a 32-byte salt from a pool ID so each pool gets a unique, reproducible address.
 fn pool_salt(env: &Env, pool_id: u32) -> BytesN<32> {
     let mut bytes = [0u8; 32];
@@ -120,11 +139,7 @@ fn sort_precedes(sort: PoolSort, left: &(u32, PoolRecord), right: &(u32, PoolRec
     ordering.is_lt() || (ordering.is_eq() && left.0 < right.0)
 }
 
-fn insert_sorted(
-    records: &mut Vec<(u32, PoolRecord)>,
-    record: (u32, PoolRecord),
-    sort: PoolSort,
-) {
+fn insert_sorted(records: &mut Vec<(u32, PoolRecord)>, record: (u32, PoolRecord), sort: PoolSort) {
     let mut insert_at: u32 = records.len();
     for (index, existing) in records.iter().enumerate() {
         if sort_precedes(sort, &record, &existing) {
@@ -381,6 +396,34 @@ impl Factory {
         let mut records: Vec<(u32, PoolRecord)> = vec![&env];
         let mut next_start_id = scan_end;
 
+        let asset_key = DataKey::AssetPools(asset.clone());
+        if let Some(asset_ids) = env.storage().persistent().get::<DataKey, Vec<u32>>(&asset_key) {
+            bump_asset_pools(&env, &asset);
+            for pool_id in asset_ids.iter() {
+                if pool_id < start_id {
+                    continue;
+                }
+                if pool_id >= scan_end {
+                    next_start_id = scan_end;
+                    break;
+                }
+                if records.len() >= capped_limit {
+                    next_start_id = pool_id;
+                    break;
+                }
+                let key = DataKey::Pool(pool_id);
+                if let Some(record) = env.storage().persistent().get::<DataKey, PoolRecord>(&key) {
+                    bump_pool(&env, pool_id);
+                    records.push_back((pool_id, record));
+                }
+            }
+            return Ok(ListPoolsResponse {
+                records,
+                next_start_id,
+                total: count,
+            });
+        }
+
         for pool_id in start_id..scan_end {
             if records.len() >= capped_limit {
                 next_start_id = pool_id;
@@ -595,6 +638,10 @@ impl Factory {
         record.wasm_hash = new_wasm_hash.clone();
         env.storage().persistent().set(&key, &record);
 
+        env.storage()
+            .instance()
+            .set(&DataKey::UpgradeCount, &read_upgrade_count(&env).saturating_add(1));
+
         #[allow(deprecated)]
         env.events().publish(
             (symbol_short!("factory"), symbol_short!("pool_upg")),
@@ -602,6 +649,14 @@ impl Factory {
         );
 
         Ok(())
+    }
+
+    /// Total number of successful `upgrade_pool` calls performed by this
+    /// factory, for pool-version tracking and analytics (#258).
+    pub fn upgrade_count(env: Env) -> Result<u32, FactoryError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(read_upgrade_count(&env))
     }
 
     /// Update the WASM hash used for future `create_pool` deployments. Admin-only.
@@ -648,10 +703,8 @@ impl Factory {
             .instance()
             .set(&DataKey::PoolCreationPaused, &true);
         #[allow(deprecated)]
-        env.events().publish(
-            (symbol_short!("factory"), symbol_short!("pause_cr")),
-            admin,
-        );
+        env.events()
+            .publish((symbol_short!("factory"), symbol_short!("pause_cr")), admin);
         Ok(())
     }
 
@@ -668,10 +721,8 @@ impl Factory {
             .instance()
             .set(&DataKey::PoolCreationPaused, &false);
         #[allow(deprecated)]
-        env.events().publish(
-            (symbol_short!("factory"), symbol_short!("unps_cr")),
-            admin,
-        );
+        env.events()
+            .publish((symbol_short!("factory"), symbol_short!("unps_cr")), admin);
         Ok(())
     }
 
@@ -747,6 +798,9 @@ impl Factory {
         let min_lock_period: u32 = min_lock_period
             .try_into()
             .map_err(|_| FactoryError::MinLockPeriodOutOfRange)?;
+        if min_lock_period < MIN_LOCK_PERIOD {
+            return Err(FactoryError::MinLockPeriodTooShort);
+        }
         let effective_min_stake = if min_stake_amount <= 0 {
             MIN_STAKE_AMOUNT
         } else {
@@ -800,6 +854,15 @@ impl Factory {
             .persistent()
             .set(&DataKey::Pool(pool_id), &record);
         bump_pool(&env, pool_id);
+        let asset_key = DataKey::AssetPools(asset.clone());
+        let mut asset_pool_ids: Vec<u32> = env
+            .storage()
+            .persistent()
+            .get(&asset_key)
+            .unwrap_or_else(|| vec![&env]);
+        asset_pool_ids.push_back(pool_id);
+        env.storage().persistent().set(&asset_key, &asset_pool_ids);
+        bump_asset_pools(&env, &asset);
         env.storage()
             .instance()
             .set(&DataKey::PoolCount, &next_count);

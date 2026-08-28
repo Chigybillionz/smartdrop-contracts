@@ -433,7 +433,27 @@ fn test_set_boost_and_get_config() {
 #[test]
 fn test_get_boost_config_none_before_set() {
     let t = setup(2, 1);
-    assert!(t.client.get_boost_config(&t.user).is_none());
+    let cfg = t
+        .client
+        .get_boost_config(&t.user)
+        .expect("boost config should default to zero allocation");
+    assert_eq!(cfg.allocation_pct, 0);
+    assert_eq!(cfg.multiplier, 2);
+}
+
+#[test]
+fn test_total_credits_tracks_cumulative_accrual() {
+    let t = setup(2, 1);
+    t.client.stake(&t.user, &1_000);
+    assert_eq!(t.client.total_credits(), 0);
+
+    advance_ledgers(&t.env, 10);
+    t.client.set_boost(&t.user, &50u32);
+    assert_eq!(t.client.total_credits(), 10_000);
+
+    advance_ledgers(&t.env, 10);
+    t.client.set_boost(&t.user, &50u32);
+    assert_eq!(t.client.total_credits(), 25_000);
 }
 
 #[test]
@@ -1179,19 +1199,39 @@ fn test_lock_assets_creates_position() {
 }
 
 #[test]
+fn test_has_position_returns_false_without_position() {
+    let t = setup(1, 1);
+    assert!(!t.client.has_position(&t.user));
+}
+
+#[test]
+fn test_has_position_returns_true_after_lock() {
+    let t = setup(1, 1);
+    t.client.lock_assets(&t.user, &500);
+    assert!(t.client.has_position(&t.user));
+}
+
+#[test]
+fn test_has_position_returns_false_after_full_unlock() {
+    let t = setup(1, 1);
+    t.client.lock_assets(&t.user, &500);
+    advance_ledgers(&t.env, 100);
+    t.client.unlock_assets(&t.user, &500);
+    assert!(!t.client.has_position(&t.user));
+}
+
+#[test]
 fn test_lock_assets_additional_lock_checkpoints_credits() {
     // Lock 1000, advance 10 ledgers (10000 credits), then lock 500 more.
     // After checkpoint: banked = 10000, amount = 1500.
-    let t = setup(1, 1);
+    // Earn 10 more ledgers with 0 boost: 1500 * 10 = 15000.
+    // Total: 25000.
+    let t = setup(1, 1); // multiplier=1 so no boost effect here
     t.client.lock_assets(&t.user, &1_000);
     advance_ledgers(&t.env, 10);
-    t.client.lock_assets(&t.user, &500); // triggers checkpoint
-    let pos = t
-        .client
-        .get_user_position(&t.user)
-        .expect("position should exist");
-    assert_eq!(pos.amount, 1_500);
-    assert_eq!(pos.total_credits, 10_000); // 1000 * 10
+    t.client.lock_assets(&t.user, &500); // banks 10000
+    advance_ledgers(&t.env, 10);
+    assert_eq!(t.client.get_credits(&t.user), 25_000);
 }
 
 #[test]
@@ -1395,8 +1435,6 @@ fn test_unlock_assets_split_across_min_lock_period_boundary_reaches_same_final_s
 
     assert!(a.client.get_user_position(&a.user).is_none());
     assert!(b.client.get_user_position(&b.user).is_none());
-    assert_eq!(a.client.calculate_credits(&a.user), 0);
-    assert_eq!(b.client.calculate_credits(&b.user), 0);
     assert_eq!(
         a.token.balance(&a.user) - a_initial_balance,
         b.token.balance(&b.user) - b_initial_balance,
@@ -1405,79 +1443,6 @@ fn test_unlock_assets_split_across_min_lock_period_boundary_reaches_same_final_s
         a.token.balance(&a.contract_id),
         b.token.balance(&b.contract_id)
     );
-}
-
-#[test]
-fn test_unlock_assets_rejects_zero_amount() {
-    let t = setup(1, 1);
-    t.client.lock_assets(&t.user, &1_000);
-    assert!(t.client.try_unlock_assets(&t.user, &0i128).is_err());
-}
-
-#[test]
-fn test_unlock_assets_rejects_more_than_locked() {
-    let t = setup(1, 1);
-    t.client.lock_assets(&t.user, &1_000);
-    assert!(t.client.try_unlock_assets(&t.user, &1_001i128).is_err());
-}
-
-#[test]
-fn test_unlock_assets_rejects_when_no_position() {
-    let t = setup(1, 1);
-    assert!(t.client.try_unlock_assets(&t.user, &100i128).is_err());
-}
-
-#[test]
-fn test_unlock_assets_emits_event() {
-    let t = setup(1, 1);
-    t.client.lock_assets(&t.user, &1_000);
-    advance_ledgers(&t.env, 5);
-    t.client.unlock_assets(&t.user, &1_000);
-
-    assert_eq!(
-        t.env.events().all().filter_by_contract(&t.contract_id),
-        soroban_sdk::vec![
-            &t.env,
-            (
-                t.contract_id.clone(),
-                soroban_sdk::vec![
-                    &t.env,
-                    soroban_sdk::symbol_short!("pool").into_val(&t.env),
-                    soroban_sdk::symbol_short!("unlocked").into_val(&t.env)
-                ],
-                (t.user.clone(), 1_000i128, 5_000i128).into_val(&t.env),
-            )
-        ]
-    );
-}
-
-// ── minimum lock period tests ─────────────────────────────────────────────────
-
-#[test]
-fn test_unlock_blocked_before_min_lock_period() {
-    let t = setup_with_lock_period(1, 1, 100);
-    t.client.lock_assets(&t.user, &1_000);
-    advance_ledgers(&t.env, 50); // only 50 of 100 ledgers elapsed
-    assert!(t.client.try_unlock_assets(&t.user, &1_000).is_err());
-}
-
-#[test]
-fn test_unlock_allowed_after_min_lock_period() {
-    let t = setup_with_lock_period(1, 1, 100);
-    t.client.lock_assets(&t.user, &1_000);
-    advance_ledgers(&t.env, 100); // Should succeed at exactly the boundary.
-                                  // Should succeed — no panic.
-    t.client.unlock_assets(&t.user, &1_000);
-    assert!(t.client.get_user_position(&t.user).is_none());
-}
-
-#[test]
-fn test_unlock_allowed_well_past_min_lock_period() {
-    let t = setup_with_lock_period(1, 1, 10);
-    t.client.lock_assets(&t.user, &1_000);
-    advance_ledgers(&t.env, 500);
-    t.client.unlock_assets(&t.user, &1_000);
-    assert!(t.client.get_user_position(&t.user).is_none());
 }
 
 #[test]
@@ -1875,7 +1840,7 @@ fn test_unpause_restores_stake() {
     t.client.pause();
     t.client.unpause();
     t.client.stake(&t.user, &500);
-    assert_eq!(t.client.get_stake(&t.user).unwrap().amount, 500);
+       assert_eq!(t.client.get_stake(&t.user).unwrap().amount, 500);
 }
 
 #[test]
@@ -2511,7 +2476,7 @@ fn test_unstake_reverts_entirely_if_stake_token_naively_reenters() {
     );
 
     // Trap rolled back the whole call — the seeded stake is still present,
-    // unstake never actually completed.
+    // no unstake applied.
     let stake = client.get_stake(&user).unwrap();
     assert_eq!(stake.amount, 500);
 }

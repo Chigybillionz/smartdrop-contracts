@@ -20,6 +20,8 @@ pub enum PoolError {
     Paused = 10,
     /// Returned by `accept_admin` when no admin handoff is pending.
     NoPendingAdmin = 11,
+    /// Returned by `batch_add_to_whitelist` or `batch_remove_from_whitelist` when batch exceeds 50 users.
+    BatchTooLarge = 12,
 }
 
 /// Per-user boost configuration returned by `get_boost_config`.
@@ -123,4 +125,5 @@ pub struct ListWhitelistedResponse {
     pub users: Vec<Address>,
     /// Total number of whitelisted addresses.
     pub total: u32,
+    TotalCredits,
 }

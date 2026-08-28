@@ -307,7 +307,7 @@ impl VestingWallet {
         #[allow(deprecated)]
         env.events().publish(
             (symbol_short!("vest"), symbol_short!("revoked")),
-            (funder, vested, unvested),
+            (admin, get_beneficiary(&env), vested, unvested),
         );
 
         Ok(())
@@ -352,6 +352,19 @@ impl VestingWallet {
             end_ledger: get_end_ledger(&env),
             revocable: is_revocable(&env),
         })
+    }
+
+    /// Returns `(start_ledger, cliff_ledger, end_ledger)` in a single read for
+    /// frontends that render the vesting schedule (#256). Returns
+    /// `NotInitialized` if the wallet has not been initialized.
+    pub fn vesting_dates(env: Env) -> Result<(u32, u32, u32), VestingError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok((
+            get_start_ledger(&env),
+            get_cliff_ledger(&env),
+            get_end_ledger(&env),
+        ))
     }
 
     /// Emergency recovery that deliberately bypasses vesting arithmetic.

@@ -15,6 +15,8 @@ pub enum DataKey {
     PoolCreationPaused,
     /// Running count of admin transfers performed.
     AdminTransferCount,
+    /// Running total of successful `upgrade_pool` calls, for version tracking (#258).
+    UpgradeCount,
 }
 
 /// On-chain record for a registered farming pool.
@@ -112,7 +114,7 @@ pub enum FactoryError {
     /// `upgrade_pool` failed because the target pool does not support upgrades
     /// (e.g. older deployment without upgrade/admin entry points) or the upgrade call failed.
     PoolUpgradeFailed = 10,
-        /// `create_pool`'s asset does not respond as a valid token contract.
+    /// `create_pool`'s asset does not respond as a valid token contract.
     InvalidAsset = 11,
     /// `create_pool`'s minimum stake is below the protocol dust threshold.
     InvalidMinStakeAmount = 12,
@@ -120,4 +122,6 @@ pub enum FactoryError {
     PoolCreationPaused = 13,
     /// `set_pool_wasm_hash` or `initialize` was called with an all-zero WASM hash.
     InvalidWasmHash = 14,
+    /// `create_pool`'s minimum lock period is below the minimum allowed threshold.
+    MinLockPeriodTooShort = 14,
 }

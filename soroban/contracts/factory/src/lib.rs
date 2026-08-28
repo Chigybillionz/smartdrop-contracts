@@ -20,6 +20,8 @@ const LEDGERS_PER_DAY: u128 = 17_280;
 // Minimum stake in the asset's smallest units. This is 0.1 token for the
 // standard 7-decimal Stellar asset convention and prevents dust positions.
 const MIN_STAKE_AMOUNT: i128 = 1_000_000;
+// Minimum lock period in ledgers required to prevent flash-loan-style attacks.
+const MIN_LOCK_PERIOD: u32 = 1;
 
 /// Convert a "credits per day" figure into the deployed pool's native
 /// "credits per ledger" `credit_rate`.
@@ -120,11 +122,7 @@ fn sort_precedes(sort: PoolSort, left: &(u32, PoolRecord), right: &(u32, PoolRec
     ordering.is_lt() || (ordering.is_eq() && left.0 < right.0)
 }
 
-fn insert_sorted(
-    records: &mut Vec<(u32, PoolRecord)>,
-    record: (u32, PoolRecord),
-    sort: PoolSort,
-) {
+fn insert_sorted(records: &mut Vec<(u32, PoolRecord)>, record: (u32, PoolRecord), sort: PoolSort) {
     let mut insert_at: u32 = records.len();
     for (index, existing) in records.iter().enumerate() {
         if sort_precedes(sort, &record, &existing) {
@@ -620,10 +618,8 @@ impl Factory {
             .instance()
             .set(&DataKey::PoolCreationPaused, &true);
         #[allow(deprecated)]
-        env.events().publish(
-            (symbol_short!("factory"), symbol_short!("pause_cr")),
-            admin,
-        );
+        env.events()
+            .publish((symbol_short!("factory"), symbol_short!("pause_cr")), admin);
         Ok(())
     }
 
@@ -640,10 +636,8 @@ impl Factory {
             .instance()
             .set(&DataKey::PoolCreationPaused, &false);
         #[allow(deprecated)]
-        env.events().publish(
-            (symbol_short!("factory"), symbol_short!("unps_cr")),
-            admin,
-        );
+        env.events()
+            .publish((symbol_short!("factory"), symbol_short!("unps_cr")), admin);
         Ok(())
     }
 
@@ -719,6 +713,9 @@ impl Factory {
         let min_lock_period: u32 = min_lock_period
             .try_into()
             .map_err(|_| FactoryError::MinLockPeriodOutOfRange)?;
+        if min_lock_period < MIN_LOCK_PERIOD {
+            return Err(FactoryError::MinLockPeriodTooShort);
+        }
         let effective_min_stake = if min_stake_amount <= 0 {
             MIN_STAKE_AMOUNT
         } else {

@@ -2003,6 +2003,62 @@ fn test_emergency_withdraw_while_unpaused_returns_not_paused() {
     assert!(matches!(result, Err(Ok(PoolError::NotPaused))));
 }
 
+// ── #130: multiplier-lock invariant tests ───────────────────────────────────
+
+/// Asserts that `set_global_multiplier` has zero effect on the lock/position accrual path.
+///
+/// Design Invariant:
+/// Boost allocations and the global multiplier apply ONLY to staked positions (`UserStake`),
+/// never to locked positions (`Position`). Mid-lock admin changes to `global_multiplier` must
+/// have zero measurable impact on accrued or accruing locked credits.
+#[test]
+fn test_global_multiplier_change_does_not_affect_locked_position_credits() {
+    let t = setup(1, 1);
+
+    // Lock 1,000 tokens and stake 1,000 tokens for the same user.
+    t.client.lock_assets(&t.user, &1_000);
+    t.client.stake(&t.user, &1_000);
+    t.client.set_boost(&t.user, &100u32); // 100% boost allocation on stake side
+
+    // Advance 10 ledgers under multiplier = 1.
+    advance_ledgers(&t.env, 10);
+
+    // Admin updates global multiplier from 1 to 5 mid-lock.
+    t.client.set_global_multiplier(&5u32);
+
+    // Advance another 10 ledgers under multiplier = 5. Total elapsed = 20 ledgers.
+    advance_ledgers(&t.env, 10);
+
+    // Lock side: credits = amount * credit_rate * total_elapsed = 1000 * 1 * 20 = 20,000.
+    // The multiplier change to 5 must have ZERO effect on locked position credit accrual.
+    assert_eq!(t.client.calculate_credits(&t.user), 20_000);
+
+    // Stake side: uncheckpointed window retroactively reflects multiplier = 5.
+    // 100% boost -> effective stake 5,000. Credits = 5,000 * 1 * 20 = 100,000.
+    assert_eq!(t.client.get_credits(&t.user), 100_000);
+
+    // Unlock assets and verify position credits bank cleanly.
+    t.client.unlock_assets(&t.user, &1_000);
+    assert_eq!(t.client.calculate_credits(&t.user), 0);
+}
+
+/// Asserts that `set_boost` (user allocation percentage) has zero effect on locked position credits.
+#[test]
+fn test_set_boost_has_zero_effect_on_locked_position_credits() {
+    let t = setup(2, 1); // multiplier = 2
+
+    // User locks 1,000 tokens without any stake.
+    t.client.lock_assets(&t.user, &1_000);
+
+    // User sets boost allocation to 100%.
+    t.client.set_boost(&t.user, &100u32);
+
+    advance_ledgers(&t.env, 10);
+
+    // Lock credits must equal 1000 * 1 * 10 = 10,000 regardless of boost setting or 2x multiplier.
+    assert_eq!(t.client.calculate_credits(&t.user), 10_000);
+}
+
 #[test]
 fn test_emergency_withdraw_requires_user_auth() {
     let (env, contract_id, client, _admin, user) = setup_without_mocked_auth();

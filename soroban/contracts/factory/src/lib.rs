@@ -453,6 +453,10 @@ impl Factory {
                 bump_pool(&env, pool_id);
             }
         }
+        env.events().publish(
+            (symbol_short!("factory"), symbol_short!("ttl_ref")),
+            (start_id, end),
+        );
         Ok(())
     }
 

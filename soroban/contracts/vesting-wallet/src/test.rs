@@ -2,10 +2,9 @@
 
 use super::*;
 use soroban_sdk::{
-    symbol_short,
     testutils::{Address as _, Events, Ledger},
     token::{StellarAssetClient, TokenClient},
-    Address, Env, IntoVal,
+    Address, Env,
 };
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
@@ -528,4 +527,35 @@ fn test_get_vesting_schedule_uninitialized_returns_not_initialized() {
         client.try_get_vesting_schedule(),
         Err(Ok(VestingError::NotInitialized))
     ));
+}
+
+#[test]
+fn test_release_count_increments_on_release() {
+    let t = setup(50, 200, 1_000);
+
+    // Initially 0
+    assert_eq!(t.client.release_count(), 0);
+    assert_eq!(t.client.get_release_count(), 0);
+
+    // Release before cliff (0 tokens releasable) does not increment count
+    assert_eq!(t.client.release(), 0);
+    assert_eq!(t.client.release_count(), 0);
+
+    // Advance past cliff and release tokens
+    advance_ledgers(&t.env, 100);
+    let released1 = t.client.release();
+    assert!(released1 > 0);
+    assert_eq!(t.client.release_count(), 1);
+    assert_eq!(t.client.get_release_count(), 1);
+
+    // Immediate subsequent release (0 tokens) does not increment
+    assert_eq!(t.client.release(), 0);
+    assert_eq!(t.client.release_count(), 1);
+
+    // Advance to end and release remainder
+    advance_ledgers(&t.env, 200);
+    let released2 = t.client.release();
+    assert!(released2 > 0);
+    assert_eq!(t.client.release_count(), 2);
+    assert_eq!(t.client.get_release_count(), 2);
 }

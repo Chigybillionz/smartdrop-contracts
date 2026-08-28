@@ -82,6 +82,20 @@ fn is_revoked(env: &Env) -> bool {
         .unwrap_or(false)
 }
 
+fn read_release_count(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::ReleaseCount)
+        .unwrap_or(0)
+}
+
+fn increment_release_count(env: &Env) {
+    let count = read_release_count(env);
+    env.storage()
+        .instance()
+        .set(&DataKey::ReleaseCount, &(count + 1));
+}
+
 // ── Vesting formula ───────────────────────────────────────────────────────────
 
 /// Linear vesting with cliff.
@@ -227,6 +241,8 @@ impl VestingWallet {
         if releasable == 0 {
             return Ok(0);
         }
+
+        increment_release_count(&env);
 
         env.storage()
             .instance()
@@ -420,6 +436,17 @@ impl VestingWallet {
         );
 
         Ok(())
+    }
+
+    /// Return the total number of release operations performed.
+    pub fn release_count(env: Env) -> Result<u32, VestingError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(read_release_count(&env))
+    }
+
+    pub fn get_release_count(env: Env) -> Result<u32, VestingError> {
+        Self::release_count(env)
     }
 }
 

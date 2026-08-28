@@ -150,6 +150,20 @@ fn insert_sorted(records: &mut Vec<(u32, PoolRecord)>, record: (u32, PoolRecord)
     records.insert(insert_at, record);
 }
 
+fn read_admin_transfer_count(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::AdminTransferCount)
+        .unwrap_or(0)
+}
+
+fn increment_admin_transfer_count(env: &Env) {
+    let count = read_admin_transfer_count(env);
+    env.storage()
+        .instance()
+        .set(&DataKey::AdminTransferCount, &(count + 1));
+}
+
 #[contract]
 pub struct Factory;
 
@@ -534,12 +548,26 @@ impl Factory {
         current.require_auth();
         bump_instance(&env);
         env.storage().instance().set(&DataKey::Admin, &new_admin);
+        increment_admin_transfer_count(&env);
         #[allow(deprecated)]
         env.events().publish(
             (symbol_short!("factory"), symbol_short!("adm_xfr")),
             (current, new_admin),
         );
         Ok(())
+    }
+
+    /// Return the total number of admin transfers performed.
+    ///
+    /// Returns `NotInitialized` if the factory has not been initialized.
+    pub fn admin_transfer_count(env: Env) -> Result<u32, FactoryError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(read_admin_transfer_count(&env))
+    }
+
+    pub fn get_admin_transfer_count(env: Env) -> Result<u32, FactoryError> {
+        Self::admin_transfer_count(env)
     }
 
     /// Upgrade one registered farming pool in place. Admin-only.

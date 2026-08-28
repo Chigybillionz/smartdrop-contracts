@@ -13,6 +13,8 @@ pub enum DataKey {
     Pool(u32),
     /// Flag indicating if pool creation is currently paused.
     PoolCreationPaused,
+    /// Running count of admin transfers performed.
+    AdminTransferCount,
     /// Running total of successful `upgrade_pool` calls, for version tracking (#258).
     UpgradeCount,
 }
@@ -118,6 +120,8 @@ pub enum FactoryError {
     InvalidMinStakeAmount = 12,
     /// `create_pool` was called while pool creation is paused.
     PoolCreationPaused = 13,
+    /// `set_pool_wasm_hash` or `initialize` was called with an all-zero WASM hash.
+    InvalidWasmHash = 14,
     /// `create_pool`'s minimum lock period is below the minimum allowed threshold.
     MinLockPeriodTooShort = 14,
 }

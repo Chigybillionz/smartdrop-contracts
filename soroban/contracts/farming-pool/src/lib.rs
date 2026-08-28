@@ -281,6 +281,32 @@ fn decrement_staked_user_count(env: &Env) {
     }
 }
 
+fn read_lock_count(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::LockCount)
+        .unwrap_or(0)
+}
+
+fn increment_lock_count(env: &Env) {
+    let count = read_lock_count(env);
+    env.storage()
+        .instance()
+        .set(&DataKey::LockCount, &(count + 1));
+}
+
+fn read_unstake_count(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::UnstakeCount)
+        .unwrap_or(0)
+}
+
+fn increment_unstake_count(env: &Env) {
+    let count = read_unstake_count(env);
+    env.storage()
+        .instance()
+        .set(&DataKey::UnstakeCount, &(count + 1));
 fn get_emergency_withdrawal_count(env: &Env) -> u32 {
     env.storage()
         .instance()
@@ -710,6 +736,7 @@ impl FarmingPool {
         if !was_staked && is_user_staked(&env, &user) {
             increment_staked_user_count(&env);
         }
+        increment_lock_count(&env);
         add_total_staked(&env, amount);
 
         let stake_token = get_stake_token(&env)?;
@@ -1093,7 +1120,7 @@ impl FarmingPool {
         let key = DataKey::Whitelisted(user.clone());
         env.storage().persistent().remove(&key);
 
-        let mut users = get_whitelisted_users_list(&env);
+        let users = get_whitelisted_users_list(&env);
         let mut new_users: Vec<Address> = Vec::new(&env);
         for u in users.iter() {
             if u != user {
@@ -1309,6 +1336,7 @@ impl FarmingPool {
         if was_staked && !is_user_staked(&env, &from) {
             decrement_staked_user_count(&env);
         }
+        increment_unstake_count(&env);
         subtract_total_staked(&env, stake.amount);
         Ok(total_credits)
     }
@@ -1598,6 +1626,43 @@ impl FarmingPool {
             .instance()
             .get(&DataKey::TotalDistributedCredits)
             .unwrap_or(0))
+    }
+
+    /// Return the count of currently staked unique users in the pool.
+    pub fn staked_user_count(env: Env) -> Result<u32, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(env
+            .storage()
+            .instance()
+            .get(&DataKey::StakedUserCount)
+            .unwrap_or(0))
+    }
+
+    pub fn get_staked_user_count(env: Env) -> Result<u32, PoolError> {
+        Self::staked_user_count(env)
+    }
+
+    /// Return the total number of lock operations performed on the pool.
+    pub fn lock_count(env: Env) -> Result<u32, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(read_lock_count(&env))
+    }
+
+    pub fn get_lock_count(env: Env) -> Result<u32, PoolError> {
+        Self::lock_count(env)
+    }
+
+    /// Return the total number of unstake operations performed on the pool.
+    pub fn unstake_count(env: Env) -> Result<u32, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(read_unstake_count(&env))
+    }
+
+    pub fn get_unstake_count(env: Env) -> Result<u32, PoolError> {
+        Self::unstake_count(env)
     }
 }
 

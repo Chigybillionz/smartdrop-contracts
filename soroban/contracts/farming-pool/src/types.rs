@@ -108,5 +108,22 @@ pub enum DataKey {
     WhitelistedUsers,
     MinStakeAmount,
     TotalStaked,
+    /// Cumulative credits committed to users since pool initialization.
+    TotalDistributedCredits,
+    StakedUserCount,
+    /// Running count of total lock operations performed.
+    LockCount,
+    /// Running count of total unstake operations performed.
+    UnstakeCount,
+}
+
+/// Paginated response for `get_whitelisted_users`.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ListWhitelistedResponse {
+    /// Whitelisted addresses in the requested page.
+    pub users: Vec<Address>,
+    /// Total number of whitelisted addresses.
+    pub total: u32,
     TotalCredits,
 }

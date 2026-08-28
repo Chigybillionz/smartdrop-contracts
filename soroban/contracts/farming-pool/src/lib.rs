@@ -679,6 +679,17 @@ impl FarmingPool {
         Ok(Some(position))
     }
 
+    /// Lightweight check for whether `user` has an active locked position.
+    ///
+    /// Returns `true` if the user has a non-zero locked position, `false`
+    /// otherwise. This is cheaper than `get_user_position` as it avoids
+    /// computing uncommitted credit accrual.
+    pub fn has_position(env: Env, user: Address) -> Result<bool, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(get_position(&env, &user).is_some())
+    }
+
     pub fn pause(env: Env) -> Result<(), PoolError> {
         require_initialized(&env)?;
         get_admin(&env)?.require_auth();

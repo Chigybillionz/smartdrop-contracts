@@ -7,7 +7,9 @@ mod types;
 
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, BytesN, Env, Vec};
 pub use types::PoolError;
-use types::{BankedCreditTotals, BoostConfig, DataKey, ListWhitelistedResponse, Position, UserStake};
+use types::{
+    BankedCreditTotals, BoostConfig, DataKey, ListWhitelistedResponse, Position, UserStake,
+};
 
 // Expose compiled WASM bytes so sibling crates (e.g. `factory`) can upload the
 // real farming-pool contract in their integration tests via:
@@ -368,12 +370,7 @@ fn compute_credits(
     compute_total_stake(amount, allocation_pct, multiplier) * credit_rate * ledgers_elapsed as i128
 }
 
-fn compute_stake_accrual(
-    env: &Env,
-    user: &Address,
-    stake: &UserStake,
-    current: u32,
-) -> i128 {
+fn compute_stake_accrual(env: &Env, user: &Address, stake: &UserStake, current: u32) -> i128 {
     let allocation_pct = get_user_boost(env, user).unwrap_or(0);
     let current_multiplier = read_global_multiplier(env);
     let change_ledger = read_global_multiplier_change_ledger(env);
@@ -389,8 +386,12 @@ fn compute_stake_accrual(
         );
     }
 
-    let pre_change_elapsed = change_ledger.saturating_sub(stake.start_ledger).min(elapsed_since_start);
-    let post_change_elapsed = current.saturating_sub(change_ledger).min(elapsed_since_start.saturating_sub(pre_change_elapsed));
+    let pre_change_elapsed = change_ledger
+        .saturating_sub(stake.start_ledger)
+        .min(elapsed_since_start);
+    let post_change_elapsed = current
+        .saturating_sub(change_ledger)
+        .min(elapsed_since_start.saturating_sub(pre_change_elapsed));
 
     compute_credits(
         stake.amount,
@@ -443,7 +444,8 @@ fn checkpoint_position(env: &Env, user: &Address, position: &mut Position) {
     let current = env.ledger().sequence();
     let elapsed = current.saturating_sub(position.checkpoint_ledger);
     let allocation_pct = get_user_boost(env, user).unwrap_or(0);
-    let effective_amount = compute_total_stake(position.amount, allocation_pct, read_global_multiplier(env));
+    let effective_amount =
+        compute_total_stake(position.amount, allocation_pct, read_global_multiplier(env));
     position.total_credits += effective_amount * position.credit_rate * elapsed as i128;
     position.checkpoint_ledger = current;
     position.credit_rate = read_credit_rate(env);
@@ -645,8 +647,10 @@ impl FarmingPool {
         if whitelist_enabled(&env) && !is_user_whitelisted(&env, &user) {
             return Err(PoolError::NotWhitelisted);
         }
+        let existing_amount = get_position(&env, &user).map_or(0i128, |p| p.amount);
+        let total_amount = existing_amount + amount;
         let min_stake = Self::get_min_stake_amount(env.clone())?;
-        if amount < min_stake {
+        if total_amount < min_stake {
             return Err(PoolError::BelowMinimumStake);
         }
 
@@ -774,7 +778,11 @@ impl FarmingPool {
             .sequence()
             .saturating_sub(position.checkpoint_ledger);
         let allocation_pct = get_user_boost(&env, &user).unwrap_or(0);
-        let effective_amount = compute_total_stake(position.amount, allocation_pct, read_global_multiplier(&env));
+        let effective_amount = compute_total_stake(
+            position.amount,
+            allocation_pct,
+            read_global_multiplier(&env),
+        );
         Ok(position.total_credits + effective_amount * position.credit_rate * elapsed as i128)
     }
 
@@ -794,7 +802,11 @@ impl FarmingPool {
         let current = env.ledger().sequence();
         let elapsed = current.saturating_sub(position.checkpoint_ledger);
         let allocation_pct = get_user_boost(&env, &user).unwrap_or(0);
-        let effective_amount = compute_total_stake(position.amount, allocation_pct, read_global_multiplier(&env));
+        let effective_amount = compute_total_stake(
+            position.amount,
+            allocation_pct,
+            read_global_multiplier(&env),
+        );
         position.total_credits += effective_amount * position.credit_rate * elapsed as i128;
         position.checkpoint_ledger = current;
         position.credit_rate = read_credit_rate(&env);
@@ -807,7 +819,9 @@ impl FarmingPool {
         bump_instance(&env);
         env.storage().instance().set(&DataKey::Paused, &true);
         env.storage().instance().set(&DataKey::PausedStaking, &true);
-        env.storage().instance().set(&DataKey::PausedWithdrawals, &true);
+        env.storage()
+            .instance()
+            .set(&DataKey::PausedWithdrawals, &true);
         env.events()
             .publish((symbol_short!("pool"), symbol_short!("paused")), ());
         Ok(())
@@ -827,7 +841,9 @@ impl FarmingPool {
         require_initialized(&env)?;
         get_admin(&env)?.require_auth();
         bump_instance(&env);
-        env.storage().instance().set(&DataKey::PausedWithdrawals, &true);
+        env.storage()
+            .instance()
+            .set(&DataKey::PausedWithdrawals, &true);
         env.events()
             .publish((symbol_short!("pool"), symbol_short!("wd_pause")), ());
         Ok(())
@@ -838,8 +854,12 @@ impl FarmingPool {
         get_admin(&env)?.require_auth();
         bump_instance(&env);
         env.storage().instance().set(&DataKey::Paused, &false);
-        env.storage().instance().set(&DataKey::PausedStaking, &false);
-        env.storage().instance().set(&DataKey::PausedWithdrawals, &false);
+        env.storage()
+            .instance()
+            .set(&DataKey::PausedStaking, &false);
+        env.storage()
+            .instance()
+            .set(&DataKey::PausedWithdrawals, &false);
         env.events()
             .publish((symbol_short!("pool"), symbol_short!("unpaused")), ());
         Ok(())
@@ -849,7 +869,9 @@ impl FarmingPool {
         require_initialized(&env)?;
         get_admin(&env)?.require_auth();
         bump_instance(&env);
-        env.storage().instance().set(&DataKey::PausedStaking, &false);
+        env.storage()
+            .instance()
+            .set(&DataKey::PausedStaking, &false);
         env.events()
             .publish((symbol_short!("pool"), symbol_short!("stg_unps")), ());
         Ok(())
@@ -859,7 +881,9 @@ impl FarmingPool {
         require_initialized(&env)?;
         get_admin(&env)?.require_auth();
         bump_instance(&env);
-        env.storage().instance().set(&DataKey::PausedWithdrawals, &false);
+        env.storage()
+            .instance()
+            .set(&DataKey::PausedWithdrawals, &false);
         env.events()
             .publish((symbol_short!("pool"), symbol_short!("wd_unps")), ());
         Ok(())
@@ -962,7 +986,10 @@ impl FarmingPool {
     /// lock/unlock `position` and boost `stake` histories are kept separate so
     /// that a user who held both does not lose which credits came from where
     /// (#145). Returns zeros when `user` has no banked credits.
-    pub fn get_banked_credits_split(env: Env, user: Address) -> Result<BankedCreditTotals, PoolError> {
+    pub fn get_banked_credits_split(
+        env: Env,
+        user: Address,
+    ) -> Result<BankedCreditTotals, PoolError> {
         bump_instance(&env);
         let key = DataKey::BankedCredits(user.clone());
         let value: Option<BankedCreditTotals> = env.storage().persistent().get(&key);
@@ -1077,7 +1104,9 @@ impl FarmingPool {
     pub fn batch_add_to_whitelist(env: Env, users: Vec<Address>) -> Result<(), PoolError> {
         require_initialized(&env)?;
         get_admin(&env)?.require_auth();
-        assert!(users.len() <= 50, "max 50 addresses per call");
+        if users.len() > 50 {
+            return Err(PoolError::BatchTooLarge);
+        }
         bump_instance(&env);
 
         let mut list = get_whitelisted_users_list(&env);
@@ -1102,7 +1131,9 @@ impl FarmingPool {
     pub fn batch_remove_from_whitelist(env: Env, users: Vec<Address>) -> Result<(), PoolError> {
         require_initialized(&env)?;
         get_admin(&env)?.require_auth();
-        assert!(users.len() <= 50, "max 50 addresses per call");
+        if users.len() > 50 {
+            return Err(PoolError::BatchTooLarge);
+        }
         bump_instance(&env);
 
         let mut list = get_whitelisted_users_list(&env);
@@ -1293,9 +1324,10 @@ impl FarmingPool {
         env.storage()
             .instance()
             .set(&DataKey::GlobalMultiplier, &multiplier);
-        env.storage()
-            .instance()
-            .set(&DataKey::GlobalMultiplierChangeLedger, &env.ledger().sequence());
+        env.storage().instance().set(
+            &DataKey::GlobalMultiplierChangeLedger,
+            &env.ledger().sequence(),
+        );
         env.events().publish(
             (symbol_short!("boost"), symbol_short!("mult_set")),
             multiplier,
@@ -1319,7 +1351,7 @@ impl FarmingPool {
             .set(&DataKey::CreditRate, &new_rate);
         env.events().publish(
             (symbol_short!("pool"), symbol_short!("rate_set")),
-            (old_rate, new_rate),
+            (old_rate, new_rate, env.ledger().sequence()),
         );
         Ok(())
     }
@@ -1410,9 +1442,12 @@ impl FarmingPool {
                     .sequence()
                     .saturating_sub(position.checkpoint_ledger);
                 let allocation_pct = get_user_boost(&env, &user).unwrap_or(0);
-                let effective_amount = compute_total_stake(position.amount, allocation_pct, read_global_multiplier(&env));
-                position.total_credits
-                    + effective_amount * position.credit_rate * elapsed as i128
+                let effective_amount = compute_total_stake(
+                    position.amount,
+                    allocation_pct,
+                    read_global_multiplier(&env),
+                );
+                position.total_credits + effective_amount * position.credit_rate * elapsed as i128
             })
             .unwrap_or(0);
 

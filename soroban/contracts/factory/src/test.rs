@@ -1273,3 +1273,59 @@ fn test_create_pool_initializes_real_farming_pool_atomically() {
     // succeed and return the factory's admin, not panic with NotInitialized.
     assert_eq!(pool_client.admin(), admin);
 }
+
+// ── pause_pool_creation tests ──────────────────────────────────────────────────
+
+#[test]
+fn test_pause_pool_creation_prevents_create_pool() {
+    let t = setup();
+    assert_eq!(t.client.is_pool_creation_paused(), false);
+
+    t.client.pause_pool_creation();
+    assert_eq!(t.client.is_pool_creation_paused(), true);
+
+    let asset = Address::generate(&t.env);
+    let result = t
+        .client
+        .try_create_pool(&asset, &1_728_000u128, &2u32, &10u64, &0i128);
+
+    assert!(matches!(result, Err(Ok(FactoryError::PoolCreationPaused))));
+}
+
+#[test]
+fn test_unpause_pool_creation_allows_create_pool() {
+    let t = setup();
+    t.client.pause_pool_creation();
+    assert_eq!(t.client.is_pool_creation_paused(), true);
+
+    t.client.unpause_pool_creation();
+    assert_eq!(t.client.is_pool_creation_paused(), false);
+
+    let asset = Address::generate(&t.env);
+    let pool_id = t
+        .client
+        .create_pool(&asset, &1_728_000u128, &2u32, &10u64, &0i128);
+    assert_eq!(pool_id, 0);
+}
+
+#[test]
+fn test_pause_pool_creation_requires_admin_auth() {
+    let (env, factory_addr, client, _admin, user) = setup_without_mocked_auth();
+
+    let result = client
+        .mock_auths(&[MockAuth {
+            address: &user,
+            invoke: &MockAuthInvoke {
+                contract: &factory_addr,
+                fn_name: "pause_pool_creation",
+                args: ().into_val(&env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_pause_pool_creation();
+
+    assert!(
+        result.is_err(),
+        "non-admin pause_pool_creation must be rejected"
+    );
+}

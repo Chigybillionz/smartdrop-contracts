@@ -11,6 +11,8 @@ pub enum DataKey {
     WasmHash,
     /// Per-pool record keyed by monotonically assigned pool ID.
     Pool(u32),
+    /// Flag indicating if pool creation is currently paused.
+    PoolCreationPaused,
 }
 
 /// On-chain record for a registered farming pool.
@@ -112,4 +114,6 @@ pub enum FactoryError {
     InvalidAsset = 11,
     /// `create_pool`'s minimum stake is below the protocol dust threshold.
     InvalidMinStakeAmount = 12,
+    /// `create_pool` was called while pool creation is paused.
+    PoolCreationPaused = 13,
 }

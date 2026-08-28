@@ -577,6 +577,58 @@ impl Factory {
         Ok(())
     }
 
+    /// Pause pool creation. Admin-only.
+    ///
+    /// Prevents future `create_pool` calls during maintenance or security emergencies.
+    /// Emits a `pause_cr` event.
+    pub fn pause_pool_creation(env: Env) -> Result<(), FactoryError> {
+        require_initialized(&env)?;
+        let admin = load_admin(&env)?;
+        admin.require_auth();
+        bump_instance(&env);
+
+        env.storage()
+            .instance()
+            .set(&DataKey::PoolCreationPaused, &true);
+        #[allow(deprecated)]
+        env.events().publish(
+            (symbol_short!("factory"), symbol_short!("pause_cr")),
+            admin,
+        );
+        Ok(())
+    }
+
+    /// Resume pool creation. Admin-only.
+    ///
+    /// Allows `create_pool` calls after a pause. Emits an `unps_cr` event.
+    pub fn unpause_pool_creation(env: Env) -> Result<(), FactoryError> {
+        require_initialized(&env)?;
+        let admin = load_admin(&env)?;
+        admin.require_auth();
+        bump_instance(&env);
+
+        env.storage()
+            .instance()
+            .set(&DataKey::PoolCreationPaused, &false);
+        #[allow(deprecated)]
+        env.events().publish(
+            (symbol_short!("factory"), symbol_short!("unps_cr")),
+            admin,
+        );
+        Ok(())
+    }
+
+    /// Return whether pool creation is currently paused.
+    pub fn is_pool_creation_paused(env: Env) -> Result<bool, FactoryError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(env
+            .storage()
+            .instance()
+            .get(&DataKey::PoolCreationPaused)
+            .unwrap_or(false))
+    }
+
     /// Create, deploy, and initialize a new farming pool. Admin-only.
     ///
     /// Unlike the pre-#80 version of this function, the deployed pool is no
@@ -613,6 +665,16 @@ impl Factory {
         let admin = load_admin(&env)?;
         admin.require_auth();
         bump_instance(&env);
+
+        let paused: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::PoolCreationPaused)
+            .unwrap_or(false);
+        if paused {
+            return Err(FactoryError::PoolCreationPaused);
+        }
+
         validate_asset(&env, &asset)?;
 
         if global_multiplier < 1 {

@@ -108,6 +108,11 @@ pub enum DataKey {
     TotalStaked,
     /// Cumulative credits committed to users since pool initialization.
     TotalDistributedCredits,
+    /// Number of addresses currently holding a stake or locked position.
+    /// (Referenced by `increment_staked_user_count` / `decrement_staked_user_count`.)
+    StakedUserCount,
+    /// Running total of `emergency_withdraw` calls since pool initialization (#257).
+    EmergencyWithdrawalCount,
 }
 
 /// Paginated response for `get_whitelisted_users`.

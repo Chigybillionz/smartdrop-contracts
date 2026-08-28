@@ -272,6 +272,20 @@ fn decrement_staked_user_count(env: &Env) {
     }
 }
 
+fn get_emergency_withdrawal_count(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::EmergencyWithdrawalCount)
+        .unwrap_or(0)
+}
+
+fn increment_emergency_withdrawal_count(env: &Env) {
+    let count = get_emergency_withdrawal_count(env);
+    env.storage()
+        .instance()
+        .set(&DataKey::EmergencyWithdrawalCount, &(count.saturating_add(1)));
+}
+
 fn set_banked_credits(env: &Env, user: &Address, totals: BankedCreditTotals) {
     let key = DataKey::BankedCredits(user.clone());
     env.storage().persistent().set(&key, &totals);
@@ -942,11 +956,20 @@ impl FarmingPool {
             );
         }
 
+        increment_emergency_withdrawal_count(&env);
+
         env.events().publish(
             (symbol_short!("pool"), symbol_short!("emrg_exit")),
             (admin, user, total_returned),
         );
         Ok(total_returned)
+    }
+
+    /// Total number of successful `emergency_withdraw` calls since pool
+    /// initialization, for protocol risk monitoring (#257).
+    pub fn emergency_withdrawal_count(env: Env) -> u32 {
+        bump_instance(&env);
+        get_emergency_withdrawal_count(&env)
     }
 
     pub fn get_banked_credits(env: Env, user: Address) -> i128 {
@@ -1471,6 +1494,17 @@ impl FarmingPool {
         stake.credit_rate = read_credit_rate(&env);
         stake.multiplier = read_global_multiplier(&env);
         Ok(Some(stake))
+    }
+
+    /// Ledger at which `user`'s continuous-stake credits were last
+    /// checkpointed, or `None` if the user has no active stake (#255).
+    ///
+    /// `checkpoint` resets `UserStake.start_ledger` to the current ledger on
+    /// every `stake` / `unstake` / `set_boost`, so this is the origin the
+    /// user's next accrual is measured from.
+    pub fn last_checkpoint_ledger(env: Env, user: Address) -> Option<u32> {
+        bump_instance(&env);
+        get_user_stake(&env, &user).map(|stake| stake.start_ledger)
     }
 
     pub fn total_staked(env: Env) -> Result<i128, PoolError> {

@@ -91,6 +91,14 @@ fn load_wasm_hash(env: &Env) -> Result<BytesN<32>, FactoryError> {
         .ok_or(FactoryError::NotInitialized)
 }
 
+/// Read the running count of successful `upgrade_pool` calls (#258).
+fn read_upgrade_count(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::UpgradeCount)
+        .unwrap_or(0)
+}
+
 /// Build a 32-byte salt from a pool ID so each pool gets a unique, reproducible address.
 fn pool_salt(env: &Env, pool_id: u32) -> BytesN<32> {
     let mut bytes = [0u8; 32];
@@ -567,6 +575,10 @@ impl Factory {
         record.wasm_hash = new_wasm_hash.clone();
         env.storage().persistent().set(&key, &record);
 
+        env.storage()
+            .instance()
+            .set(&DataKey::UpgradeCount, &read_upgrade_count(&env).saturating_add(1));
+
         #[allow(deprecated)]
         env.events().publish(
             (symbol_short!("factory"), symbol_short!("pool_upg")),
@@ -574,6 +586,14 @@ impl Factory {
         );
 
         Ok(())
+    }
+
+    /// Total number of successful `upgrade_pool` calls performed by this
+    /// factory, for pool-version tracking and analytics (#258).
+    pub fn upgrade_count(env: Env) -> Result<u32, FactoryError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(read_upgrade_count(&env))
     }
 
     /// Update the WASM hash used for future `create_pool` deployments. Admin-only.

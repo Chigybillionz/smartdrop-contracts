@@ -2,9 +2,10 @@
 
 use super::*;
 use soroban_sdk::{
+    symbol_short,
     testutils::{Address as _, Events, Ledger},
     token::{StellarAssetClient, TokenClient},
-    Address, Env,
+    Address, Env, IntoVal,
 };
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
@@ -452,3 +453,28 @@ fn test_released_amount_tracks_cumulative_releases() {
     assert_eq!(t.client.released_amount(), 500);
     assert_eq!(t.token.balance(&t.beneficiary), 500);
 }
+
+#[test]
+fn test_transfer_admin_emits_event_and_updates_admin() {
+    let t = setup(0, 100, 1_000);
+    let new_admin = Address::generate(&t.env);
+
+    t.client.transfer_admin(&new_admin);
+
+    assert_eq!(
+        t.env.events().all(),
+        soroban_sdk::vec![
+            &t.env,
+            (
+                t.contract_id.clone(),
+                soroban_sdk::vec![
+                    &t.env,
+                    symbol_short!("vest").into_val(&t.env),
+                    symbol_short!("adm_xfr").into_val(&t.env),
+                ],
+                (t.admin.clone(), new_admin.clone()).into_val(&t.env),
+            )
+        ]
+    );
+}
+

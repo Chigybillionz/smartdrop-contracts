@@ -751,9 +751,22 @@ impl FarmingPool {
 
     /// Withdraw staked/locked tokens during emergency when pool is paused.
     ///
-    /// Allows users to self-withdraw their assets during a pause without requiring
-    /// admin intervention. Requires authorization from `user`. Checkpoints and preserves
-    /// accrued credit totals in `BankedCredits`.
+    /// Allows users to withdraw their staked/locked assets during an emergency pause.
+    /// Requires authorization from `user`. Checkpoints and preserves accrued credit
+    /// totals in `BankedCredits`.
+    ///
+    /// # Usage & Operational Guidelines
+    /// - **When to Use**: Called during emergency situations or protocol maintenance when
+    ///   the contract has been explicitly paused via `pause()`.
+    /// - **Credit Preservation**: Staked/locked assets are returned in full while accrued
+    ///   credits are safely preserved in `BankedCredits` split between `position_credits`
+    ///   and `stake_credits` (see `get_banked_credits_split`). Users do not forfeit earned credits.
+    /// - **User Notification & Off-Chain Tracking**: Every emergency withdrawal emits an
+    ///   on-chain `("pool", "emrg_exit")` event with payload `(admin, user, total_returned)`.
+    ///   Indexers and frontends notify users of emergency exit transactions by monitoring this topic.
+    /// - **Audit Requirements & Privilege Governance**: Because emergency mechanisms handle pool
+    ///   assets during security pauses, all admin actions initiating pauses and emergency exits must
+    ///   be logged to immutable audit trails and governed by multi-sig or timelock controls.
     pub fn emergency_withdraw(env: Env, user: Address) -> Result<i128, PoolError> {
         user.require_auth();
         require_initialized(&env)?;

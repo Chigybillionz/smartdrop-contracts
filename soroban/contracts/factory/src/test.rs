@@ -249,6 +249,27 @@ fn test_pool_wasm_hash_returns_stored_hash() {
     assert_eq!(t.client.pool_wasm_hash(), t.wasm_hash);
 }
 
+#[test]
+fn test_initialize_rejects_zero_wasm_hash() {
+    let (env, client) = setup_uninitialized();
+    let admin = Address::generate(&env);
+    let zero_hash = BytesN::from_array(&env, &[0u8; 32]);
+    assert_eq!(
+        client.try_initialize(&admin, &zero_hash),
+        Err(Ok(FactoryError::InvalidWasmHash))
+    );
+}
+
+#[test]
+fn test_set_pool_wasm_hash_rejects_zero_hash() {
+    let t = setup();
+    let zero_hash = BytesN::from_array(&t.env, &[0u8; 32]);
+    assert_eq!(
+        t.client.try_set_pool_wasm_hash(&zero_hash),
+        Err(Ok(FactoryError::InvalidWasmHash))
+    );
+}
+
 // ── pool_count ────────────────────────────────────────────────────────────────
 
 #[test]

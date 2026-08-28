@@ -827,6 +827,17 @@ impl FarmingPool {
         Ok(Some(position))
     }
 
+    /// Lightweight check for whether `user` has an active locked position.
+    ///
+    /// Returns `true` if the user has a non-zero locked position, `false`
+    /// otherwise. This is cheaper than `get_user_position` as it avoids
+    /// computing uncommitted credit accrual.
+    pub fn has_position(env: Env, user: Address) -> Result<bool, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(get_position(&env, &user).is_some())
+    }
+
     pub fn pause(env: Env) -> Result<(), PoolError> {
         require_initialized(&env)?;
         get_admin(&env)?.require_auth();
@@ -1360,6 +1371,14 @@ impl FarmingPool {
 
     /// Set the credit accrual rate. Rejects non-positive values and anything
     /// above `MAX_CREDIT_RATE` — see #89 for the overflow-safety derivation.
+    ///
+    /// The new rate takes effect immediately for *new* checkpoints. Existing
+    /// staked or locked users retain their previous rate snapshot until they
+    /// interact (e.g. `stake`/`unstake` or `lock_assets`/`unlock_assets`),
+    /// at which point `checkpoint` records the new rate. This is by design:
+    /// iterating all on-chain user entries would be prohibitively expensive.
+    /// Off-chain indexers should apply the rate from the `rate_set` event
+    /// when computing credits for users who have not yet checkpointed.
     pub fn set_credit_rate(env: Env, new_rate: i128) -> Result<(), PoolError> {
         require_initialized(&env)?;
         get_admin(&env)?.require_auth();

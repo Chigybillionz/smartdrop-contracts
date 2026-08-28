@@ -1179,6 +1179,28 @@ fn test_lock_assets_creates_position() {
 }
 
 #[test]
+fn test_has_position_returns_false_without_position() {
+    let t = setup(1, 1);
+    assert!(!t.client.has_position(&t.user));
+}
+
+#[test]
+fn test_has_position_returns_true_after_lock() {
+    let t = setup(1, 1);
+    t.client.lock_assets(&t.user, &500);
+    assert!(t.client.has_position(&t.user));
+}
+
+#[test]
+fn test_has_position_returns_false_after_full_unlock() {
+    let t = setup(1, 1);
+    t.client.lock_assets(&t.user, &500);
+    advance_ledgers(&t.env, 100);
+    t.client.unlock_assets(&t.user, &500);
+    assert!(!t.client.has_position(&t.user));
+}
+
+#[test]
 fn test_lock_assets_additional_lock_checkpoints_credits() {
     // Lock 1000, advance 10 ledgers (10000 credits), then lock 500 more.
     // After checkpoint: banked = 10000, amount = 1500.

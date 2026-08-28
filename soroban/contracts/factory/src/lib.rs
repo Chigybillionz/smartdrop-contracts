@@ -3,7 +3,8 @@
 mod types;
 
 use soroban_sdk::{
-    contract, contractimpl, symbol_short, vec, Address, BytesN, Env, IntoVal, Symbol, Val, Vec,
+    contract, contractimpl, symbol_short, vec, Address, BytesN, Env, IntoVal, String, Symbol, Val,
+    Vec,
 };
 use types::{DataKey, FactoryError, ListPoolsResponse, PoolRecord, PoolSort};
 

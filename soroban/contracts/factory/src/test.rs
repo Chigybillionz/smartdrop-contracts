@@ -276,6 +276,7 @@ fn test_list_pools_returns_first_page() {
     assert_eq!(page.records.len(), 10);
     assert_eq!(page.next_start_id, 10);
     assert_eq!(page.total, 25);
+    assert_eq!(page.has_more, true);
 
     assert_eq!(
         page.records
@@ -299,6 +300,7 @@ fn test_list_pools_returns_second_page() {
     assert_eq!(page.records.len(), 10);
     assert_eq!(page.next_start_id, 20);
     assert_eq!(page.total, 25);
+    assert_eq!(page.has_more, true);
     assert_eq!(page.records.get(0).map(|record| record.0), Some(10));
     assert_eq!(page.records.get(9).map(|record| record.0), Some(19));
 }
@@ -311,6 +313,7 @@ fn test_list_pools_returns_partial_last_page() {
     assert_eq!(page.records.len(), 5);
     assert_eq!(page.next_start_id, 25);
     assert_eq!(page.total, 25);
+    assert_eq!(page.has_more, false);
     assert_eq!(page.records.get(0).map(|record| record.0), Some(20));
     assert_eq!(page.records.get(4).map(|record| record.0), Some(24));
 }
@@ -323,6 +326,7 @@ fn test_list_pools_returns_empty_when_start_is_beyond_count() {
     assert_eq!(page.records.len(), 0);
     assert_eq!(page.next_start_id, 3);
     assert_eq!(page.total, 3);
+    assert_eq!(page.has_more, false);
 }
 
 #[test]
@@ -333,7 +337,25 @@ fn test_list_pools_caps_limit_at_twenty() {
     assert_eq!(page.records.len(), 20);
     assert_eq!(page.next_start_id, 20);
     assert_eq!(page.total, 25);
+    assert_eq!(page.has_more, true);
     assert_eq!(page.records.get(19).map(|record| record.0), Some(19));
+}
+
+#[test]
+fn test_list_pools_has_more_flag_accuracy() {
+    let t = setup_with_pool_records(5);
+
+    // First page (limit 3 of 5) -> has_more is true
+    let page1 = t.client.list_pools(&0u32, &3u32);
+    assert_eq!(page1.records.len(), 3);
+    assert_eq!(page1.next_start_id, 3);
+    assert_eq!(page1.has_more, true);
+
+    // Next page (start 3, limit 3 of 5) -> has_more is false (reaches end: 5)
+    let page2 = t.client.list_pools(&page1.next_start_id, &3u32);
+    assert_eq!(page2.records.len(), 2);
+    assert_eq!(page2.next_start_id, 5);
+    assert_eq!(page2.has_more, false);
 }
 
 // ── get_pools_by_asset ────────────────────────────────────────────────────────

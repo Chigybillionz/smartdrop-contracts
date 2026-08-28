@@ -250,10 +250,12 @@ impl Factory {
             }
         }
 
+        let has_more = end < count;
         Ok(ListPoolsResponse {
             records,
             next_start_id: if end < count { end } else { count },
             total: count,
+            has_more,
         })
     }
 
@@ -290,10 +292,12 @@ impl Factory {
             }
         }
 
+        let has_more = end < count;
         Ok(ListPoolsResponse {
             records,
             next_start_id: if end < count { end } else { count },
             total: count,
+            has_more,
         })
     }
 
@@ -358,10 +362,12 @@ impl Factory {
             }
         }
 
+        let has_more = next_start_id < count;
         Ok(ListPoolsResponse {
             records,
             next_start_id,
             total: count,
+            has_more,
         })
     }
 

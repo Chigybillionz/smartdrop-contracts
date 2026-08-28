@@ -63,6 +63,8 @@ pub struct ListPoolsResponse {
     pub next_start_id: u32,
     /// Total number of pools registered in the factory.
     pub total: u32,
+    /// Whether there are more records available beyond this page.
+    pub has_more: bool,
 }
 
 /// Typed errors returned by the factory contract.

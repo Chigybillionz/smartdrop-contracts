@@ -13,6 +13,8 @@ pub enum DataKey {
     Pool(u32),
     /// Flag indicating if pool creation is currently paused.
     PoolCreationPaused,
+    /// Running count of admin transfers performed.
+    AdminTransferCount,
 }
 
 /// On-chain record for a registered farming pool.
@@ -116,4 +118,6 @@ pub enum FactoryError {
     InvalidMinStakeAmount = 12,
     /// `create_pool` was called while pool creation is paused.
     PoolCreationPaused = 13,
+    /// `set_pool_wasm_hash` or `initialize` was called with an all-zero WASM hash.
+    InvalidWasmHash = 14,
 }

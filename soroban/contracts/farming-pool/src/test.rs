@@ -2702,7 +2702,7 @@ fn test_staked_user_count_increments_and_decrements_correctly() {
     assert_eq!(t.client.get_staked_user_count(), 0);
 
     let user2 = Address::generate(&t.env);
-    t.token_admin_client.mint(&user2, &10_000);
+    t.token_sac.mint(&user2, &10_000);
 
     // User 1 stakes: count becomes 1
     t.client.stake(&t.user, &1_000);
@@ -2747,17 +2747,84 @@ fn test_lock_assets_top_up_extends_unlock_ledger() {
 
     // Trying to unlock at ledger start_ledger + 12 should fail
     advance_ledgers(&t.env, 7); // now sequence is start_ledger + 12
-    match t.client.try_unlock_assets(&t.user, &1_500) {
-        Err(Ok(PoolError::MinimumLockNotElapsed)) => {}
-        other => assert!(
-            other.is_err(),
-            "unlock before extended lock period must fail"
-        ),
-    }
+    assert!(
+        t.client.try_unlock_assets(&t.user, &1_500).is_err(),
+        "unlock before extended lock period must fail"
+    );
 
     // Advancing past start_ledger + 15 allows full unlock
     advance_ledgers(&t.env, 3); // now sequence is start_ledger + 15
     t.client.unlock_assets(&t.user, &1_500);
+}
+
+#[test]
+fn test_lock_count_increments_on_every_lock_operation() {
+    let t = setup(1, 10);
+    assert_eq!(t.client.lock_count(), 0);
+    assert_eq!(t.client.get_lock_count(), 0);
+
+    let user2 = Address::generate(&t.env);
+    t.token_sac.mint(&user2, &10_000);
+
+    // Flexible staking does not affect lock_count
+    t.client.stake(&t.user, &1_000);
+    assert_eq!(t.client.lock_count(), 0);
+    t.client.unstake(&t.user);
+    assert_eq!(t.client.lock_count(), 0);
+
+    // User 1 locks: lock_count becomes 1
+    t.client.lock_assets(&t.user, &1_000);
+    assert_eq!(t.client.lock_count(), 1);
+    assert_eq!(t.client.get_lock_count(), 1);
+
+    // User 2 locks: lock_count becomes 2
+    t.client.lock_assets(&user2, &2_000);
+    assert_eq!(t.client.lock_count(), 2);
+
+    // User 1 top-up (additional lock operation): lock_count becomes 3
+    t.client.lock_assets(&t.user, &500);
+    assert_eq!(t.client.lock_count(), 3);
+
+    // Unlocking assets does not decrement lock_count
+    advance_ledgers(&t.env, 10);
+    t.client.unlock_assets(&user2, &2_000);
+    assert_eq!(t.client.lock_count(), 3);
+}
+
+#[test]
+fn test_unstake_count_increments_on_every_unstake_operation() {
+    let t = setup(1, 10);
+    assert_eq!(t.client.unstake_count(), 0);
+    assert_eq!(t.client.get_unstake_count(), 0);
+
+    let user2 = Address::generate(&t.env);
+    t.token_sac.mint(&user2, &10_000);
+
+    // Staking does not affect unstake_count
+    t.client.stake(&t.user, &1_000);
+    t.client.stake(&user2, &2_000);
+    assert_eq!(t.client.unstake_count(), 0);
+
+    // Lock/unlock operations do not affect unstake_count
+    let user3 = Address::generate(&t.env);
+    t.token_sac.mint(&user3, &10_000);
+    t.client.lock_assets(&user3, &1_000);
+    assert_eq!(t.client.unstake_count(), 0);
+
+    // User 1 unstakes: unstake_count becomes 1
+    t.client.unstake(&t.user);
+    assert_eq!(t.client.unstake_count(), 1);
+    assert_eq!(t.client.get_unstake_count(), 1);
+
+    // User 2 unstakes: unstake_count becomes 2
+    t.client.unstake(&user2);
+    assert_eq!(t.client.unstake_count(), 2);
+    assert_eq!(t.client.get_unstake_count(), 2);
+
+    // Unlocking assets does not increment unstake_count
+    advance_ledgers(&t.env, 10);
+    t.client.unlock_assets(&user3, &1_000);
+    assert_eq!(t.client.unstake_count(), 2);
 }
 
 

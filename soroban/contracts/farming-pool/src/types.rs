@@ -108,6 +108,11 @@ pub enum DataKey {
     TotalStaked,
     /// Cumulative credits committed to users since pool initialization.
     TotalDistributedCredits,
+    StakedUserCount,
+    /// Running count of total lock operations performed.
+    LockCount,
+    /// Running count of total unstake operations performed.
+    UnstakeCount,
 }
 
 /// Paginated response for `get_whitelisted_users`.

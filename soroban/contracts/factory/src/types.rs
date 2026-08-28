@@ -13,6 +13,8 @@ pub enum DataKey {
     Pool(u32),
     /// Flag indicating if pool creation is currently paused.
     PoolCreationPaused,
+    /// Running total of successful `upgrade_pool` calls, for version tracking (#258).
+    UpgradeCount,
 }
 
 /// On-chain record for a registered farming pool.

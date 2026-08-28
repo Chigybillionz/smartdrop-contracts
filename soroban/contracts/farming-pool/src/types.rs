@@ -1,4 +1,4 @@
-use soroban_sdk::{contracterror, contracttype, Address};
+use soroban_sdk::{contracterror, contracttype, Address, Vec};
 
 /// Error codes returned by the farming pool contract.
 #[contracterror]
@@ -20,6 +20,8 @@ pub enum PoolError {
     Paused = 10,
     /// Returned by `accept_admin` when no admin handoff is pending.
     NoPendingAdmin = 11,
+    /// Returned by `batch_add_to_whitelist` or `batch_remove_from_whitelist` when batch exceeds 50 users.
+    BatchTooLarge = 12,
 }
 
 /// Per-user boost configuration returned by `get_boost_config`.
@@ -102,6 +104,25 @@ pub enum DataKey {
     // Whitelist keys
     WhitelistEnabled,
     Whitelisted(Address),
+    /// Ordered list of all currently whitelisted addresses (instance storage).
+    WhitelistedUsers,
     MinStakeAmount,
     TotalStaked,
+    /// Cumulative credits committed to users since pool initialization.
+    TotalDistributedCredits,
+    /// Number of addresses currently holding a stake or locked position.
+    /// (Referenced by `increment_staked_user_count` / `decrement_staked_user_count`.)
+    StakedUserCount,
+    /// Running total of `emergency_withdraw` calls since pool initialization (#257).
+    EmergencyWithdrawalCount,
+}
+
+/// Paginated response for `get_whitelisted_users`.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ListWhitelistedResponse {
+    /// Whitelisted addresses in the requested page.
+    pub users: Vec<Address>,
+    /// Total number of whitelisted addresses.
+    pub total: u32,
 }

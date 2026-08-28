@@ -266,6 +266,27 @@ fn test_pool_wasm_hash_returns_stored_hash() {
     assert_eq!(t.client.pool_wasm_hash(), t.wasm_hash);
 }
 
+#[test]
+fn test_initialize_rejects_zero_wasm_hash() {
+    let (env, client) = setup_uninitialized();
+    let admin = Address::generate(&env);
+    let zero_hash = BytesN::from_array(&env, &[0u8; 32]);
+    assert_eq!(
+        client.try_initialize(&admin, &zero_hash),
+        Err(Ok(FactoryError::InvalidWasmHash))
+    );
+}
+
+#[test]
+fn test_set_pool_wasm_hash_rejects_zero_hash() {
+    let t = setup();
+    let zero_hash = BytesN::from_array(&t.env, &[0u8; 32]);
+    assert_eq!(
+        t.client.try_set_pool_wasm_hash(&zero_hash),
+        Err(Ok(FactoryError::InvalidWasmHash))
+    );
+}
+
 // ── pool_count ────────────────────────────────────────────────────────────────
 
 #[test]
@@ -293,6 +314,7 @@ fn test_list_pools_returns_first_page() {
     assert_eq!(page.records.len(), 10);
     assert_eq!(page.next_start_id, 10);
     assert_eq!(page.total, 25);
+    assert_eq!(page.has_more, true);
 
     assert_eq!(
         page.records
@@ -316,6 +338,7 @@ fn test_list_pools_returns_second_page() {
     assert_eq!(page.records.len(), 10);
     assert_eq!(page.next_start_id, 20);
     assert_eq!(page.total, 25);
+    assert_eq!(page.has_more, true);
     assert_eq!(page.records.get(0).map(|record| record.0), Some(10));
     assert_eq!(page.records.get(9).map(|record| record.0), Some(19));
 }
@@ -328,6 +351,7 @@ fn test_list_pools_returns_partial_last_page() {
     assert_eq!(page.records.len(), 5);
     assert_eq!(page.next_start_id, 25);
     assert_eq!(page.total, 25);
+    assert_eq!(page.has_more, false);
     assert_eq!(page.records.get(0).map(|record| record.0), Some(20));
     assert_eq!(page.records.get(4).map(|record| record.0), Some(24));
 }
@@ -340,6 +364,7 @@ fn test_list_pools_returns_empty_when_start_is_beyond_count() {
     assert_eq!(page.records.len(), 0);
     assert_eq!(page.next_start_id, 3);
     assert_eq!(page.total, 3);
+    assert_eq!(page.has_more, false);
 }
 
 #[test]
@@ -350,7 +375,25 @@ fn test_list_pools_caps_limit_at_twenty() {
     assert_eq!(page.records.len(), 20);
     assert_eq!(page.next_start_id, 20);
     assert_eq!(page.total, 25);
+    assert_eq!(page.has_more, true);
     assert_eq!(page.records.get(19).map(|record| record.0), Some(19));
+}
+
+#[test]
+fn test_list_pools_has_more_flag_accuracy() {
+    let t = setup_with_pool_records(5);
+
+    // First page (limit 3 of 5) -> has_more is true
+    let page1 = t.client.list_pools(&0u32, &3u32);
+    assert_eq!(page1.records.len(), 3);
+    assert_eq!(page1.next_start_id, 3);
+    assert_eq!(page1.has_more, true);
+
+    // Next page (start 3, limit 3 of 5) -> has_more is false (reaches end: 5)
+    let page2 = t.client.list_pools(&page1.next_start_id, &3u32);
+    assert_eq!(page2.records.len(), 2);
+    assert_eq!(page2.next_start_id, 5);
+    assert_eq!(page2.has_more, false);
 }
 
 // ── get_pools_by_asset ────────────────────────────────────────────────────────
@@ -1114,6 +1157,26 @@ fn test_get_pool_bumps_pool_record_ttl() {
 }
 
 #[test]
+fn test_list_pools_bumps_pool_record_ttl() {
+    let t = setup();
+    let id = t.client.create_pool(
+        &Address::generate(&t.env),
+        &4_320_000u128,
+        &2u32,
+        &50u64,
+        &0i128,
+    );
+
+    assert_eq!(pool_record_ttl(&t.env, &t.factory_addr, id), TTL_EXTEND_TO);
+
+    advance_ledgers(&t.env, TTL_EXTEND_TO - TTL_THRESHOLD + 1);
+    assert!(pool_record_ttl(&t.env, &t.factory_addr, id) < TTL_THRESHOLD);
+
+    assert!(t.client.try_list_pools(&id, &1u32).is_ok());
+    assert_eq!(pool_record_ttl(&t.env, &t.factory_addr, id), TTL_EXTEND_TO);
+}
+
+#[test]
 fn test_refresh_pool_ttls_restores_ttl_for_unqueried_pool() {
     let t = setup();
     let id = t.client.create_pool(
@@ -1267,4 +1330,60 @@ fn test_create_pool_initializes_real_farming_pool_atomically() {
     // The pool must already be initialized: an initialized-only getter must
     // succeed and return the factory's admin, not panic with NotInitialized.
     assert_eq!(pool_client.admin(), admin);
+}
+
+// ── pause_pool_creation tests ──────────────────────────────────────────────────
+
+#[test]
+fn test_pause_pool_creation_prevents_create_pool() {
+    let t = setup();
+    assert_eq!(t.client.is_pool_creation_paused(), false);
+
+    t.client.pause_pool_creation();
+    assert_eq!(t.client.is_pool_creation_paused(), true);
+
+    let asset = Address::generate(&t.env);
+    let result = t
+        .client
+        .try_create_pool(&asset, &1_728_000u128, &2u32, &10u64, &0i128);
+
+    assert!(matches!(result, Err(Ok(FactoryError::PoolCreationPaused))));
+}
+
+#[test]
+fn test_unpause_pool_creation_allows_create_pool() {
+    let t = setup();
+    t.client.pause_pool_creation();
+    assert_eq!(t.client.is_pool_creation_paused(), true);
+
+    t.client.unpause_pool_creation();
+    assert_eq!(t.client.is_pool_creation_paused(), false);
+
+    let asset = Address::generate(&t.env);
+    let pool_id = t
+        .client
+        .create_pool(&asset, &1_728_000u128, &2u32, &10u64, &0i128);
+    assert_eq!(pool_id, 0);
+}
+
+#[test]
+fn test_pause_pool_creation_requires_admin_auth() {
+    let (env, factory_addr, client, _admin, user) = setup_without_mocked_auth();
+
+    let result = client
+        .mock_auths(&[MockAuth {
+            address: &user,
+            invoke: &MockAuthInvoke {
+                contract: &factory_addr,
+                fn_name: "pause_pool_creation",
+                args: ().into_val(&env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_pause_pool_creation();
+
+    assert!(
+        result.is_err(),
+        "non-admin pause_pool_creation must be rejected"
+    );
 }

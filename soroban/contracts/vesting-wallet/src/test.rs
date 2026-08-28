@@ -2,9 +2,10 @@
 
 use super::*;
 use soroban_sdk::{
+    symbol_short,
     testutils::{Address as _, Events, Ledger},
     token::{StellarAssetClient, TokenClient},
-    Address, Env,
+    Address, Env, IntoVal,
 };
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
@@ -148,6 +149,37 @@ fn test_double_initialize_returns_error() {
         &another_admin,
     );
     assert!(matches!(result, Err(Ok(VestingError::AlreadyInitialized))));
+}
+
+#[test]
+#[should_panic(expected = "start must be in the future")]
+fn test_initialize_rejects_start_ledger_in_the_past() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let beneficiary = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let asset = env.register_stellar_asset_contract_v2(token_admin.clone());
+    let token_sac = StellarAssetClient::new(&env, &asset.address());
+    token_sac.mint(&admin, &100i128);
+
+    advance_ledgers(&env, 10);
+    let current = env.ledger().sequence();
+    let past_start = current - 1;
+
+    let contract_id = env.register(VestingWallet, ());
+    let client = VestingWalletClient::new(&env, &contract_id);
+    client.initialize(
+        &beneficiary,
+        &asset.address(),
+        &100i128,
+        &past_start,
+        &current,
+        &(current + 100),
+        &false,
+        &admin,
+    );
 }
 
 #[test]
@@ -451,4 +483,49 @@ fn test_released_amount_tracks_cumulative_releases() {
 
     assert_eq!(t.client.released_amount(), 500);
     assert_eq!(t.token.balance(&t.beneficiary), 500);
+}
+
+// ── get_vesting_schedule tests ────────────────────────────────────────────────
+
+#[test]
+fn test_get_vesting_schedule_returns_all_parameters() {
+    let t = setup_schedule(50, 200, 1_000, true);
+
+    let schedule = t.client.get_vesting_schedule();
+
+    assert_eq!(schedule.beneficiary, t.beneficiary);
+    assert_eq!(schedule.token, t.token_address);
+    assert_eq!(schedule.total_amount, 1_000);
+    assert_eq!(schedule.start_ledger, t.start);
+    assert_eq!(schedule.cliff_ledger, t.start + 50);
+    assert_eq!(schedule.end_ledger, t.start + 250);
+    assert!(schedule.revocable);
+}
+
+#[test]
+fn test_get_vesting_schedule_reflects_transferred_beneficiary() {
+    let t = setup(0, 100, 1_000);
+
+    let new_beneficiary = Address::generate(&t.env);
+    t.client.transfer_beneficiary(&new_beneficiary);
+
+    let schedule = t.client.get_vesting_schedule();
+    assert_eq!(schedule.beneficiary, new_beneficiary);
+    assert_eq!(schedule.total_amount, 1_000);
+    assert_eq!(schedule.start_ledger, t.start);
+    assert_eq!(schedule.end_ledger, t.start + 100);
+    assert!(!schedule.revocable);
+}
+
+#[test]
+fn test_get_vesting_schedule_uninitialized_returns_not_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(VestingWallet, ());
+    let client = VestingWalletClient::new(&env, &contract_id);
+
+    assert!(matches!(
+        client.try_get_vesting_schedule(),
+        Err(Ok(VestingError::NotInitialized))
+    ));
 }

@@ -11,6 +11,10 @@ pub enum DataKey {
     WasmHash,
     /// Per-pool record keyed by monotonically assigned pool ID.
     Pool(u32),
+    /// Flag indicating if pool creation is currently paused.
+    PoolCreationPaused,
+    /// Running total of successful `upgrade_pool` calls, for version tracking (#258).
+    UpgradeCount,
 }
 
 /// On-chain record for a registered farming pool.
@@ -63,6 +67,8 @@ pub struct ListPoolsResponse {
     pub next_start_id: u32,
     /// Total number of pools registered in the factory.
     pub total: u32,
+    /// Whether there are more records available beyond this page.
+    pub has_more: bool,
 }
 
 /// Typed errors returned by the factory contract.
@@ -106,10 +112,12 @@ pub enum FactoryError {
     /// `upgrade_pool` failed because the target pool does not support upgrades
     /// (e.g. older deployment without upgrade/admin entry points) or the upgrade call failed.
     PoolUpgradeFailed = 10,
-        /// `create_pool`'s asset does not respond as a valid token contract.
+    /// `create_pool`'s asset does not respond as a valid token contract.
     InvalidAsset = 11,
     /// `create_pool`'s minimum stake is below the protocol dust threshold.
     InvalidMinStakeAmount = 12,
-    /// `initialize` was called with a zero-address admin, which would permanently lock the factory.
-    InvalidAdmin = 13,
+    /// `create_pool` was called while pool creation is paused.
+    PoolCreationPaused = 13,
+    /// `create_pool`'s minimum lock period is below the minimum allowed threshold.
+    MinLockPeriodTooShort = 14,
 }

@@ -3,7 +3,8 @@
 mod types;
 
 use soroban_sdk::{
-    contract, contractimpl, symbol_short, vec, Address, BytesN, Env, IntoVal, Symbol, Val, Vec,
+    contract, contractimpl, symbol_short, vec, Address, BytesN, Env, IntoVal, String, Symbol, Val,
+    Vec,
 };
 use types::{DataKey, FactoryError, ListPoolsResponse, PoolRecord, PoolSort};
 
@@ -152,6 +153,9 @@ impl Factory {
     ) -> Result<(), FactoryError> {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(FactoryError::AlreadyInitialized);
+        }
+        if admin == Address::from_string(&String::from_str(&env, "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")) {
+            return Err(FactoryError::InvalidAdmin);
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage()

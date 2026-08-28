@@ -154,6 +154,23 @@ fn test_double_initialize_returns_error() {
     );
 }
 
+#[test]
+fn test_initialize_rejects_zero_address_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let wasm_hash = upload_farming_pool_wasm(&env);
+    let factory_addr = env.register(Factory, ());
+    let client = FactoryClient::new(&env, &factory_addr);
+    let zero_admin = Address::from_string(&soroban_sdk::String::from_str(
+        &env,
+        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    ));
+    assert_eq!(
+        client.try_initialize(&zero_admin, &wasm_hash),
+        Err(Ok(FactoryError::InvalidAdmin))
+    );
+}
+
 // ── NotInitialized guard ──────────────────────────────────────────────────────
 
 #[test]

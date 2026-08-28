@@ -110,4 +110,6 @@ pub enum FactoryError {
     InvalidAsset = 11,
     /// `create_pool`'s minimum stake is below the protocol dust threshold.
     InvalidMinStakeAmount = 12,
+    /// `initialize` was called with a zero-address admin, which would permanently lock the factory.
+    InvalidAdmin = 13,
 }

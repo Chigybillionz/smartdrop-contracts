@@ -204,6 +204,13 @@ impl Factory {
     ///
     /// Returns `NotInitialized` if the factory has not been initialized, or
     /// `PoolNotFound` if `pool_id` has not been created yet.
+    ///
+    /// # TTL keep-alive
+    /// On success, extends the persistent TTL of the requested pool record (and
+    /// the factory instance) when remaining TTL falls below `TTL_THRESHOLD`.
+    /// Pools that are never individually queried should be kept alive via
+    /// paginated `list_pools` reads, asset-range queries, or the permissionless
+    /// `refresh_pool_ttls` function.
     pub fn get_pool(env: Env, pool_id: u32) -> Result<PoolRecord, FactoryError> {
         require_initialized(&env)?;
         bump_instance(&env);
@@ -224,6 +231,15 @@ impl Factory {
     ///
     /// Guarded like `pool_count`: an empty page from an uninitialized factory
     /// would be indistinguishable from an initialized but empty registry.
+    ///
+    /// # TTL keep-alive
+    /// Extends the persistent TTL of every pool record returned in this page
+    /// (plus the factory instance). Unlike `get_pool`, which bumps one record
+    /// per call, each paginated read refreshes all pools in the window. Indexers
+    /// that page through the registry therefore keep listed pools alive more
+    /// aggressively than pools accessed only via `get_pool(id)`. For deliberate
+    /// full-registry maintenance independent of read patterns, use
+    /// `refresh_pool_ttls`.
     ///
     /// Returns `NotInitialized` if the factory has not been initialized.
     pub fn list_pools(

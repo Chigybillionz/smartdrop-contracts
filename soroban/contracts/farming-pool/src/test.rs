@@ -1685,9 +1685,20 @@ fn test_unpause_restores_operations() {
 fn test_pause_emits_event() {
     let t = setup(1, 1);
     t.client.pause();
-    assert!(
-        !t.env.events().all().events().is_empty(),
-        "pause event not emitted"
+    assert_eq!(
+        t.env.events().all().filter_by_contract(&t.contract_id),
+        soroban_sdk::vec![
+            &t.env,
+            (
+                t.contract_id.clone(),
+                soroban_sdk::vec![
+                    &t.env,
+                    soroban_sdk::symbol_short!("pool").into_val(&t.env),
+                    soroban_sdk::symbol_short!("paused").into_val(&t.env)
+                ],
+                ().into_val(&t.env),
+            )
+        ]
     );
 }
 
@@ -1696,9 +1707,133 @@ fn test_unpause_emits_event() {
     let t = setup(1, 1);
     t.client.pause();
     t.client.unpause();
-    assert!(
-        !t.env.events().all().events().is_empty(),
-        "unpause event not emitted"
+    assert_eq!(
+        t.env.events().all().filter_by_contract(&t.contract_id),
+        soroban_sdk::vec![
+            &t.env,
+            (
+                t.contract_id.clone(),
+                soroban_sdk::vec![
+                    &t.env,
+                    soroban_sdk::symbol_short!("pool").into_val(&t.env),
+                    soroban_sdk::symbol_short!("paused").into_val(&t.env)
+                ],
+                ().into_val(&t.env),
+            ),
+            (
+                t.contract_id.clone(),
+                soroban_sdk::vec![
+                    &t.env,
+                    soroban_sdk::symbol_short!("pool").into_val(&t.env),
+                    soroban_sdk::symbol_short!("unpaused").into_val(&t.env)
+                ],
+                ().into_val(&t.env),
+            )
+        ]
+    );
+}
+
+#[test]
+fn test_pause_staking_emits_event() {
+    let t = setup(1, 1);
+    t.client.pause_staking();
+    assert_eq!(
+        t.env.events().all().filter_by_contract(&t.contract_id),
+        soroban_sdk::vec![
+            &t.env,
+            (
+                t.contract_id.clone(),
+                soroban_sdk::vec![
+                    &t.env,
+                    soroban_sdk::symbol_short!("pool").into_val(&t.env),
+                    soroban_sdk::symbol_short!("stg_pause").into_val(&t.env)
+                ],
+                ().into_val(&t.env),
+            )
+        ]
+    );
+}
+
+#[test]
+fn test_pause_withdrawals_emits_event() {
+    let t = setup(1, 1);
+    t.client.pause_withdrawals();
+    assert_eq!(
+        t.env.events().all().filter_by_contract(&t.contract_id),
+        soroban_sdk::vec![
+            &t.env,
+            (
+                t.contract_id.clone(),
+                soroban_sdk::vec![
+                    &t.env,
+                    soroban_sdk::symbol_short!("pool").into_val(&t.env),
+                    soroban_sdk::symbol_short!("wd_pause").into_val(&t.env)
+                ],
+                ().into_val(&t.env),
+            )
+        ]
+    );
+}
+
+#[test]
+fn test_unpause_staking_emits_event() {
+    let t = setup(1, 1);
+    t.client.pause_staking();
+    t.client.unpause_staking();
+    assert_eq!(
+        t.env.events().all().filter_by_contract(&t.contract_id),
+        soroban_sdk::vec![
+            &t.env,
+            (
+                t.contract_id.clone(),
+                soroban_sdk::vec![
+                    &t.env,
+                    soroban_sdk::symbol_short!("pool").into_val(&t.env),
+                    soroban_sdk::symbol_short!("stg_pause").into_val(&t.env)
+                ],
+                ().into_val(&t.env),
+            ),
+            (
+                t.contract_id.clone(),
+                soroban_sdk::vec![
+                    &t.env,
+                    soroban_sdk::symbol_short!("pool").into_val(&t.env),
+                    soroban_sdk::symbol_short!("stg_unps").into_val(&t.env)
+                ],
+                ().into_val(&t.env),
+            )
+        ]
+    );
+}
+
+#[test]
+fn test_unpause_withdrawals_emits_event() {
+    let t = setup(1, 1);
+    t.client.pause_withdrawals();
+    t.client.unpause_withdrawals();
+    assert_eq!(
+        t.env.events().all().filter_by_contract(&t.contract_id),
+        soroban_sdk::vec![
+            &t.env,
+            (
+                t.contract_id.clone(),
+                soroban_sdk::vec![
+                    &t.env,
+                    soroban_sdk::symbol_short!("pool").into_val(&t.env),
+                    soroban_sdk::symbol_short!("wd_pause").into_val(&t.env)
+                ],
+                ().into_val(&t.env),
+            ),
+            (
+                t.contract_id.clone(),
+                soroban_sdk::vec![
+                    &t.env,
+                    soroban_sdk::symbol_short!("pool").into_val(&t.env),
+                    soroban_sdk::symbol_short!("wd_unps").into_val(&t.env)
+                ],
+                ().into_val(&t.env),
+            )
+        ]
     );
 }
 

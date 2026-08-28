@@ -1139,7 +1139,7 @@ impl FarmingPool {
         new_stake.credit_rate = read_credit_rate(&env);
 
         // Checks-effects-interactions: persist state *before* the external
-        // token transfer below, consistent with `lock_assets`. See #69.
+        // token transfer below, consistent with `lock_assets`. See #69, #217.
         set_user_stake(&env, &from, &new_stake);
         add_total_staked(&env, amount);
 

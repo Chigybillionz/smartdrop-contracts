@@ -1119,6 +1119,26 @@ fn test_get_pool_bumps_pool_record_ttl() {
 }
 
 #[test]
+fn test_list_pools_bumps_pool_record_ttl() {
+    let t = setup();
+    let id = t.client.create_pool(
+        &Address::generate(&t.env),
+        &4_320_000u128,
+        &2u32,
+        &50u64,
+        &0i128,
+    );
+
+    assert_eq!(pool_record_ttl(&t.env, &t.factory_addr, id), TTL_EXTEND_TO);
+
+    advance_ledgers(&t.env, TTL_EXTEND_TO - TTL_THRESHOLD + 1);
+    assert!(pool_record_ttl(&t.env, &t.factory_addr, id) < TTL_THRESHOLD);
+
+    assert!(t.client.try_list_pools(&id, &1u32).is_ok());
+    assert_eq!(pool_record_ttl(&t.env, &t.factory_addr, id), TTL_EXTEND_TO);
+}
+
+#[test]
 fn test_refresh_pool_ttls_restores_ttl_for_unqueried_pool() {
     let t = setup();
     let id = t.client.create_pool(

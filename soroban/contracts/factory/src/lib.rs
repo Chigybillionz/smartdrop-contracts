@@ -153,6 +153,9 @@ impl Factory {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(FactoryError::AlreadyInitialized);
         }
+        if pool_wasm_hash == BytesN::from_array(&env, &[0u8; 32]) {
+            return Err(FactoryError::InvalidWasmHash);
+        }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage()
             .instance()
@@ -552,6 +555,8 @@ impl Factory {
     /// Allows the admin to point future pool deployments at a corrected or upgraded
     /// farming-pool build without redeploying the factory itself. Existing deployed
     /// pools are unaffected — Soroban contract bytecode is immutable once deployed.
+    /// Validates that `new_hash` is non-zero. Callers/admins must verify that the target
+    /// WASM has been uploaded to the chain before calling this function.
     ///
     /// Emits a `wasm_set` event with `(old_hash, new_hash)` so that the previous
     /// hash is discoverable off-chain for rollback scenarios.
@@ -560,6 +565,10 @@ impl Factory {
         let admin: Address = load_admin(&env)?;
         admin.require_auth();
         bump_instance(&env);
+
+        if new_hash == BytesN::from_array(&env, &[0u8; 32]) {
+            return Err(FactoryError::InvalidWasmHash);
+        }
 
         let old_hash: BytesN<32> = env.storage().instance().get(&DataKey::WasmHash).unwrap();
         env.storage().instance().set(&DataKey::WasmHash, &new_hash);

@@ -110,4 +110,6 @@ pub enum FactoryError {
     InvalidAsset = 11,
     /// `create_pool`'s minimum stake is below the protocol dust threshold.
     InvalidMinStakeAmount = 12,
+    /// `set_pool_wasm_hash` or `initialize` received an invalid/empty WASM hash.
+    InvalidWasmHash = 13,
 }

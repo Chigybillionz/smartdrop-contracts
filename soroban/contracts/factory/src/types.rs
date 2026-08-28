@@ -116,4 +116,6 @@ pub enum FactoryError {
     InvalidMinStakeAmount = 12,
     /// `create_pool` was called while pool creation is paused.
     PoolCreationPaused = 13,
+    /// The WASM hash provided is the zero hash (all zeros), which is invalid.
+    InvalidWasmHash = 14,
 }

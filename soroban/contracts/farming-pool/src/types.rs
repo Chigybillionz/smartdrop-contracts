@@ -20,6 +20,8 @@ pub enum PoolError {
     Paused = 10,
     /// Returned by `accept_admin` when no admin handoff is pending.
     NoPendingAdmin = 11,
+    /// Returned by `unlock_assets` when the minimum lock period has not elapsed.
+    MinimumLockNotElapsed = 12,
 }
 
 /// Per-user boost configuration returned by `get_boost_config`.
@@ -108,6 +110,7 @@ pub enum DataKey {
     TotalStaked,
     /// Cumulative credits committed to users since pool initialization.
     TotalDistributedCredits,
+    StakedUserCount,
 }
 
 /// Paginated response for `get_whitelisted_users`.

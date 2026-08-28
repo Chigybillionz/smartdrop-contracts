@@ -715,10 +715,9 @@ impl FarmingPool {
         assert!(amount <= position.amount, "insufficient locked balance");
 
         let current = env.ledger().sequence();
-        assert!(
-            current >= position.unlock_ledger,
-            "minimum lock period not elapsed"
-        );
+        if current < position.unlock_ledger {
+            return Err(PoolError::MinimumLockNotElapsed);
+        }
 
         checkpoint_position(&env, &user, &mut position);
         let total_credits = position.total_credits;
@@ -1500,6 +1499,22 @@ impl FarmingPool {
             .instance()
             .get(&DataKey::TotalDistributedCredits)
             .unwrap_or(0))
+    }
+
+    /// Return the number of users who currently have an active stake or locked position.
+    pub fn staked_user_count(env: Env) -> Result<u32, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(env
+            .storage()
+            .instance()
+            .get(&DataKey::StakedUserCount)
+            .unwrap_or(0))
+    }
+
+    /// Alias for `staked_user_count`.
+    pub fn get_staked_user_count(env: Env) -> Result<u32, PoolError> {
+        Self::staked_user_count(env)
     }
 }
 

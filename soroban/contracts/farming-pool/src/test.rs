@@ -2758,7 +2758,7 @@ fn test_staked_user_count_increments_and_decrements_correctly() {
     assert_eq!(t.client.get_staked_user_count(), 0);
 
     let user2 = Address::generate(&t.env);
-    t.token_admin_client.mint(&user2, &10_000);
+    t.token_sac.mint(&user2, &10_000);
 
     // User 1 stakes: count becomes 1
     t.client.stake(&t.user, &1_000);

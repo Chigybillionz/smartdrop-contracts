@@ -20,6 +20,7 @@ struct TestEnv {
     factory_addr: Address,
     admin: Address,
     wasm_hash: BytesN<32>,
+    asset: Address,
 }
 
 /// Real farming-pool WASM, built by `make test` / CI before `cargo test` runs
@@ -45,6 +46,17 @@ fn upload_replacement_wasm(env: &Env) -> BytesN<32> {
     env.deployer().upload_contract_wasm(replacement_wasm::WASM)
 }
 
+/// Register a Stellar Asset Contract and return its address.
+/// Used by tests that need a real token for `create_pool`'s `validate_asset` check.
+fn register_asset(env: &Env) -> Address {
+    let token_admin = Address::generate(env);
+    let asset = env.register_stellar_asset_contract_v2(token_admin.clone());
+    // Mint a trivial amount so the SAC is fully initialized.
+    let sac = soroban_sdk::token::StellarAssetClient::new(env, &asset.address());
+    sac.mint(&token_admin, &0i128);
+    asset.address()
+}
+
 /// Builds an initialised factory using the real farming-pool WASM.
 fn setup() -> TestEnv {
     let env = Env::default();
@@ -52,6 +64,7 @@ fn setup() -> TestEnv {
 
     let admin = Address::generate(&env);
     let wasm_hash = upload_farming_pool_wasm(&env);
+    let asset = register_asset(&env);
 
     let factory_addr = env.register(Factory, ());
     let client = FactoryClient::new(&env, &factory_addr);
@@ -66,6 +79,7 @@ fn setup() -> TestEnv {
         factory_addr,
         admin,
         wasm_hash,
+        asset,
     }
 }
 
@@ -108,6 +122,23 @@ fn setup_with_pool_records(count: u32) -> TestEnv {
     });
 
     t
+}
+
+/// Builds an initialised factory *without* `mock_all_auths` so that
+/// `mock_auths` / `try_*` patterns can assert on auth failures.
+fn setup_without_mocked_auth() -> (Env, Address, FactoryClient<'static>, Address, Address) {
+    let env = Env::default();
+    // Deliberately no env.mock_all_auths()
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let wasm_hash = upload_farming_pool_wasm(&env);
+    let factory_addr = env.register(Factory, ());
+    let client = FactoryClient::new(&env, &factory_addr);
+    client.initialize(&admin, &wasm_hash);
+    let client = unsafe {
+        core::mem::transmute::<FactoryClient<'_>, FactoryClient<'static>>(client)
+    };
+    (env, factory_addr, client, admin, user)
 }
 
 // ── initialize ────────────────────────────────────────────────────────────────
@@ -177,7 +208,7 @@ fn test_pool_wasm_hash_uninitialized_returns_not_initialized() {
 #[test]
 fn test_create_pool_uninitialized_returns_not_initialized() {
     let (env, client) = setup_uninitialized();
-    let asset = Address::generate(&env);
+    let asset = register_asset(&env);
     match client.try_create_pool(&asset, &1_000u128, &2u32, &86_400u64, &0i128) {
         Err(Ok(FactoryError::NotInitialized)) => {}
         _ => panic!("expected FactoryError::NotInitialized"),
@@ -215,7 +246,7 @@ fn test_list_pools_uninitialized_returns_not_initialized() {
 #[test]
 fn test_get_pools_by_asset_uninitialized_returns_not_initialized() {
     let (env, client) = setup_uninitialized();
-    let asset = Address::generate(&env);
+    let asset = register_asset(&env);
     match client.try_get_pools_by_asset(&asset, &0u32, &10u32) {
         Err(Ok(FactoryError::NotInitialized)) => {}
         _ => panic!("expected FactoryError::NotInitialized"),
@@ -384,7 +415,7 @@ fn test_list_pools_has_more_flag_accuracy() {
 #[test]
 fn test_get_pools_by_asset_returns_empty_when_no_pools() {
     let t = setup();
-    let asset = Address::generate(&t.env);
+    let asset = t.asset.clone();
     let page = t.client.get_pools_by_asset(&asset, &0u32, &10u32);
     assert_eq!(
         page.records.len(),
@@ -638,7 +669,7 @@ fn test_create_pool_rejects_missing_pool_wasm_hash() {
     env2.mock_all_auths();
     client2.initialize(&admin, &wasm_hash2);
 
-    let asset = Address::generate(&env2);
+    let asset = register_asset(&env2);
     let result = client2.try_create_pool(&asset, &17_280_000u128, &2u32, &86_400u64, &0i128);
     assert!(
         result.is_err(),
@@ -654,19 +685,20 @@ fn test_create_pool_returns_incrementing_ids() {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let wasm_hash = upload_farming_pool_wasm(&env);
+    let asset = register_asset(&env);
     let factory_addr = env.register(Factory, ());
     let client = FactoryClient::new(&env, &factory_addr);
     client.initialize(&admin, &wasm_hash);
 
     let id_a = client.create_pool(
-        &Address::generate(&env),
+        &asset,
         &8_640_000u128,
         &2u32,
         &100u64,
         &0i128,
     );
     let id_b = client.create_pool(
-        &Address::generate(&env),
+        &asset,
         &17_280_000u128,
         &3u32,
         &200u64,
@@ -687,7 +719,7 @@ fn test_get_pool_returns_correct_record() {
     let client = FactoryClient::new(&env, &factory_addr);
     client.initialize(&admin, &wasm_hash);
 
-    let asset = Address::generate(&env);
+    let asset = register_asset(&env);
     let id = client.create_pool(&asset, &4_320_000u128, &2u32, &50u64, &0i128);
     let record = client.get_pool(&id);
     assert_eq!(record.asset, asset);
@@ -706,8 +738,8 @@ fn test_get_pools_by_asset_returns_matching_ids() {
     let client = FactoryClient::new(&env, &factory_addr);
     client.initialize(&admin, &wasm_hash);
 
-    let asset_a = Address::generate(&env);
-    let asset_b = Address::generate(&env);
+    let asset_a = register_asset(&env);
+    let asset_b = register_asset(&env);
 
     let id_0 = client.create_pool(&asset_a, &1_728_000u128, &2u32, &10u64, &0i128);
     let id_1 = client.create_pool(&asset_b, &3_456_000u128, &2u32, &20u64, &0i128);
@@ -729,12 +761,13 @@ fn test_get_pools_by_asset_unknown_asset_returns_empty() {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let wasm_hash = upload_farming_pool_wasm(&env);
+    let asset = register_asset(&env);
     let factory_addr = env.register(Factory, ());
     let client = FactoryClient::new(&env, &factory_addr);
     client.initialize(&admin, &wasm_hash);
 
     client.create_pool(
-        &Address::generate(&env),
+        &asset,
         &1_728_000u128,
         &2u32,
         &10u64,
@@ -756,7 +789,7 @@ fn test_get_pools_by_asset_paginates_large_matching_registry() {
     client.initialize(&admin, &wasm_hash);
 
     // Create 25 pools all sharing the same asset
-    let asset = Address::generate(&env);
+    let asset = register_asset(&env);
     for i in 0..25 {
         client.create_pool(
             &asset,
@@ -800,8 +833,8 @@ fn test_get_pools_by_asset_bounds_scan_for_sparse_matches() {
     let client = FactoryClient::new(&env, &factory_addr);
     client.initialize(&admin, &wasm_hash);
 
-    let sparse_asset = Address::generate(&env);
-    let other_asset = Address::generate(&env);
+    let sparse_asset = register_asset(&env);
+    let other_asset = register_asset(&env);
     for i in 0..500 {
         let asset = if i == 499 {
             sparse_asset.clone()
@@ -834,8 +867,8 @@ fn test_get_pools_by_asset_can_page_sparse_matches_to_completion() {
     let client = FactoryClient::new(&env, &factory_addr);
     client.initialize(&admin, &wasm_hash);
 
-    let sparse_asset = Address::generate(&env);
-    let other_asset = Address::generate(&env);
+    let sparse_asset = register_asset(&env);
+    let other_asset = register_asset(&env);
     for i in 0..500 {
         let asset = if i == 250 || i == 499 {
             sparse_asset.clone()
@@ -880,8 +913,8 @@ fn test_get_pools_by_asset_range_custom_scan_limit() {
     let client = FactoryClient::new(&env, &factory_addr);
     client.initialize(&admin, &wasm_hash);
 
-    let sparse_asset = Address::generate(&env);
-    let other_asset = Address::generate(&env);
+    let sparse_asset = register_asset(&env);
+    let other_asset = register_asset(&env);
     for i in 0..100 {
         let asset = if i == 90 {
             sparse_asset.clone()
@@ -915,12 +948,13 @@ fn test_create_pool_emits_pool_crtd_event() {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let wasm_hash = upload_farming_pool_wasm(&env);
+    let asset = register_asset(&env);
     let factory_addr = env.register(Factory, ());
     let client = FactoryClient::new(&env, &factory_addr);
     client.initialize(&admin, &wasm_hash);
 
     client.create_pool(
-        &Address::generate(&env),
+        &asset,
         &5_184_000u128,
         &2u32,
         &30u64,
@@ -941,8 +975,8 @@ fn test_multiple_pools_stored_independently() {
     let factory_addr = env.register(Factory, ());
     let client = FactoryClient::new(&env, &factory_addr);
     client.initialize(&admin, &wasm_hash);
-    let asset_a = Address::generate(&env);
-    let asset_b = Address::generate(&env);
+    let asset_a = register_asset(&env);
+    let asset_b = register_asset(&env);
     let id_a = client.create_pool(&asset_a, &1_728_000u128, &2u32, &10u64, &0i128);
     let id_b = client.create_pool(&asset_b, &3_456_000u128, &2u32, &20u64, &0i128);
     let rec_a = client.get_pool(&id_a);
@@ -956,7 +990,7 @@ fn test_multiple_pools_stored_independently() {
 fn test_create_pool_rejects_unmatched_non_admin_auth() {
     let t = setup();
     let not_admin = Address::generate(&t.env);
-    let asset = Address::generate(&t.env);
+    let asset = t.asset.clone();
     let args = (&asset, 17_280_000u128, 2u32, 86_400u64, 0i128).into_val(&t.env);
     let invoke = MockAuthInvoke {
         contract: &t.factory_addr,
@@ -1034,7 +1068,7 @@ fn test_create_pool_returns_typed_error_when_pool_count_overflows() {
 #[test]
 fn test_create_pool_uses_deterministic_pool_addresses() {
     let t = setup();
-    let asset = Address::generate(&t.env);
+    let asset = t.asset.clone();
     let expected_before = expected_pool_address(&t.env, &t.factory_addr, 0);
     let expected_again = expected_pool_address(&t.env, &t.factory_addr, 0);
 
@@ -1051,7 +1085,7 @@ fn test_create_pool_uses_deterministic_pool_addresses() {
 #[test]
 fn test_create_pool_rejects_zero_daily_rate() {
     let t = setup();
-    let asset = Address::generate(&t.env);
+    let asset = t.asset.clone();
 
     // Below LEDGERS_PER_DAY (17_280), the daily_rate -> credit_rate conversion
     // truncates to zero, which FarmingPool::initialize would reject anyway
@@ -1067,7 +1101,7 @@ fn test_create_pool_rejects_zero_daily_rate() {
 #[test]
 fn test_create_pool_rejects_dust_minimum_stake() {
     let t = setup();
-    let asset = Address::generate(&t.env);
+    let asset = t.asset.clone();
 
     let result = t
         .client
@@ -1080,7 +1114,7 @@ fn test_create_pool_rejects_dust_minimum_stake() {
 #[test]
 fn test_create_pool_accepts_daily_rate_below_ledgers_per_day_with_ceiling_rounding() {
     let t = setup();
-    let asset = Address::generate(&t.env);
+    let asset = t.asset.clone();
 
     // Before #148 the daily_rate -> credit_rate conversion truncated, so a
     // sub-LEDGERS_PER_DAY daily_rate (17_279) became 0 and was rejected. Now it
@@ -1099,7 +1133,7 @@ fn test_create_pool_accepts_daily_rate_below_ledgers_per_day_with_ceiling_roundi
 #[test]
 fn test_create_pool_rejects_global_multiplier_below_one() {
     let t = setup();
-    let asset = Address::generate(&t.env);
+    let asset = t.asset.clone();
 
     let result = t
         .client
@@ -1110,7 +1144,7 @@ fn test_create_pool_rejects_global_multiplier_below_one() {
 #[test]
 fn test_create_pool_rejects_min_lock_period_out_of_u32_range() {
     let t = setup();
-    let asset = Address::generate(&t.env);
+    let asset = t.asset.clone();
 
     let too_large = (u32::MAX as u64) + 1;
     let result = t
@@ -1215,7 +1249,7 @@ fn test_refresh_pool_ttls_requires_initialized_factory() {
 #[test]
 fn test_create_pool_emits_pool_crtd_event_with_payload() {
     let t = setup();
-    let asset = Address::generate(&t.env);
+    let asset = t.asset.clone();
     let expected_address = expected_pool_address(&t.env, &t.factory_addr, 0);
     let id = t
         .client
@@ -1244,7 +1278,7 @@ fn test_old_admin_cannot_create_pool_after_transfer_but_new_admin_can() {
     let new_admin = Address::generate(&t.env);
     t.client.transfer_admin(&new_admin);
 
-    let old_asset = Address::generate(&t.env);
+    let old_asset = t.asset.clone();
     let old_args = (&old_asset, 1_728_000u128, 2u32, 10u64, 0i128).into_val(&t.env);
     let old_invoke = MockAuthInvoke {
         contract: &t.factory_addr,
@@ -1304,7 +1338,7 @@ fn test_create_pool_initializes_real_farming_pool_atomically() {
     let client = FactoryClient::new(&env, &factory_addr);
     client.initialize(&admin, &wasm_hash);
 
-    let asset = Address::generate(&env);
+    let asset = register_asset(&env);
     let pool_id = client.create_pool(&asset, &1_728_000u128, &2u32, &10u64, &0i128);
     let record = client.get_pool(&pool_id);
 
@@ -1325,7 +1359,7 @@ fn test_pause_pool_creation_prevents_create_pool() {
     t.client.pause_pool_creation();
     assert_eq!(t.client.is_pool_creation_paused(), true);
 
-    let asset = Address::generate(&t.env);
+    let asset = t.asset.clone();
     let result = t
         .client
         .try_create_pool(&asset, &1_728_000u128, &2u32, &10u64, &0i128);
@@ -1342,7 +1376,7 @@ fn test_unpause_pool_creation_allows_create_pool() {
     t.client.unpause_pool_creation();
     assert_eq!(t.client.is_pool_creation_paused(), false);
 
-    let asset = Address::generate(&t.env);
+    let asset = t.asset.clone();
     let pool_id = t
         .client
         .create_pool(&asset, &1_728_000u128, &2u32, &10u64, &0i128);

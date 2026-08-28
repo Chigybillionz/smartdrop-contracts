@@ -1107,6 +1107,14 @@ impl FarmingPool {
 
     /// Set the credit accrual rate. Rejects non-positive values and anything
     /// above `MAX_CREDIT_RATE` — see #89 for the overflow-safety derivation.
+    ///
+    /// The new rate takes effect immediately for *new* checkpoints. Existing
+    /// staked or locked users retain their previous rate snapshot until they
+    /// interact (e.g. `stake`/`unstake` or `lock_assets`/`unlock_assets`),
+    /// at which point `checkpoint` records the new rate. This is by design:
+    /// iterating all on-chain user entries would be prohibitively expensive.
+    /// Off-chain indexers should apply the rate from the `rate_set` event
+    /// when computing credits for users who have not yet checkpointed.
     pub fn set_credit_rate(env: Env, new_rate: i128) -> Result<(), PoolError> {
         require_initialized(&env)?;
         get_admin(&env)?.require_auth();
@@ -1177,6 +1185,15 @@ impl FarmingPool {
         Self::min_lock_period_seconds(env)
     }
 
+    /// Return the total credits (banked + uncommitted) for `user`.
+    ///
+    /// This returns the user's accumulated credits across both the locked
+    /// position and flexible stake systems. Credit *history* (how credits
+    /// accrued over time) is not tracked on-chain — only the current total.
+    /// Off-chain indexers must subscribe to `("pool", "staked")`,
+    /// `("pool", "unstaked")`, `("pool", "locked")`, and `("pool", "unlocked")`
+    /// events and maintain their own running ledger of per-checkpoint credit
+    /// snapshots to reconstruct earnings over time.
     pub fn get_credits(env: Env, user: Address) -> Result<i128, PoolError> {
         require_initialized(&env)?;
         bump_instance(&env);

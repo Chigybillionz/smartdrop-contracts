@@ -151,6 +151,37 @@ fn test_double_initialize_returns_error() {
 }
 
 #[test]
+#[should_panic(expected = "start must be in the future")]
+fn test_initialize_rejects_start_ledger_in_the_past() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let beneficiary = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let asset = env.register_stellar_asset_contract_v2(token_admin.clone());
+    let token_sac = StellarAssetClient::new(&env, &asset.address());
+    token_sac.mint(&admin, &100i128);
+
+    advance_ledgers(&env, 10);
+    let current = env.ledger().sequence();
+    let past_start = current - 1;
+
+    let contract_id = env.register(VestingWallet, ());
+    let client = VestingWalletClient::new(&env, &contract_id);
+    client.initialize(
+        &beneficiary,
+        &asset.address(),
+        &100i128,
+        &past_start,
+        &current,
+        &(current + 100),
+        &false,
+        &admin,
+    );
+}
+
+#[test]
 fn test_initialize_rejects_total_amount_above_compute_vested_ceiling() {
     let env = Env::default();
     env.mock_all_auths();

@@ -158,6 +158,10 @@ impl VestingWallet {
             return Err(VestingError::AlreadyInitialized);
         }
         assert!(total_amount > 0, "total_amount must be positive");
+        assert!(
+            start_ledger >= env.ledger().sequence(),
+            "start must be in the future"
+        );
         assert!(cliff_ledger >= start_ledger, "cliff must be >= start");
         assert!(end_ledger > cliff_ledger, "end must be > cliff");
         let duration = i128::from(end_ledger - start_ledger);

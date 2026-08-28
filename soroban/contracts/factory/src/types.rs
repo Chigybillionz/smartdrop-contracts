@@ -11,6 +11,8 @@ pub enum DataKey {
     WasmHash,
     /// Per-pool record keyed by monotonically assigned pool ID.
     Pool(u32),
+    /// Flag indicating if pool creation is currently paused.
+    PoolCreationPaused,
 }
 
 /// On-chain record for a registered farming pool.
@@ -33,6 +35,24 @@ pub struct PoolRecord {
     pub global_multiplier: u32,
     /// Minimum number of ledgers a stake must be held before withdrawal.
     pub min_lock_period: u32,
+    /// The originally requested daily rate, preserved here before ledger conversion.
+    pub daily_rate: u128,
+    /// The WASM hash used to deploy or upgrade the pool.
+    pub wasm_hash: soroban_sdk::BytesN<32>,
+}
+
+/// Sort keys supported by `list_pools_sorted`.
+#[contracttype]
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum PoolSort {
+    /// Sort by pool ID in ascending order.
+    PoolId,
+    /// Sort by per-ledger credit rate in ascending order.
+    CreditRate,
+    /// Sort by global multiplier in ascending order.
+    GlobalMultiplier,
+    /// Sort by minimum lock period in ascending order.
+    MinLockPeriod,
 }
 
 /// Paginated pool registry response.
@@ -45,6 +65,8 @@ pub struct ListPoolsResponse {
     pub next_start_id: u32,
     /// Total number of pools registered in the factory.
     pub total: u32,
+    /// Whether there are more records available beyond this page.
+    pub has_more: bool,
 }
 
 /// Typed errors returned by the factory contract.
@@ -81,4 +103,17 @@ pub enum FactoryError {
     InvalidGlobalMultiplier = 7,
     /// `create_pool` cannot allocate another monotonically increasing pool ID.
     PoolCountOverflow = 8,
+    /// `upgrade_pool` was called on a pool whose own stored admin no longer
+    /// matches the factory's current admin (the two diverge once either side
+    /// calls its own `transfer_admin` independently — see `upgrade_pool`'s docs).
+    PoolAdminMismatch = 9,
+    /// `upgrade_pool` failed because the target pool does not support upgrades
+    /// (e.g. older deployment without upgrade/admin entry points) or the upgrade call failed.
+    PoolUpgradeFailed = 10,
+        /// `create_pool`'s asset does not respond as a valid token contract.
+    InvalidAsset = 11,
+    /// `create_pool`'s minimum stake is below the protocol dust threshold.
+    InvalidMinStakeAmount = 12,
+    /// `create_pool` was called while pool creation is paused.
+    PoolCreationPaused = 13,
 }

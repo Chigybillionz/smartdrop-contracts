@@ -143,6 +143,13 @@ fn read_credit_rate(env: &Env) -> i128 {
         .unwrap_or(1)
 }
 
+fn read_total_credits(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::TotalCredits)
+        .unwrap_or(0)
+}
+
 fn get_stake_token(env: &Env) -> Result<Address, PoolError> {
     env.storage()
         .instance()
@@ -457,10 +464,9 @@ fn checkpoint(env: &Env, user: &Address, stake: &mut UserStake) {
 fn checkpoint_position(env: &Env, user: &Address, position: &mut Position) {
     let current = env.ledger().sequence();
     let elapsed = current.saturating_sub(position.checkpoint_ledger);
-    let allocation_pct = get_user_boost(env, user).unwrap_or(0);
-    let effective_amount =
-        compute_total_stake(position.amount, allocation_pct, read_global_multiplier(env));
-    position.total_credits += effective_amount * position.credit_rate * elapsed as i128;
+    let delta = position.amount * position.credit_rate * elapsed as i128;
+    position.total_credits += delta;
+    add_total_credits(env, delta);
     position.checkpoint_ledger = current;
     position.credit_rate = read_credit_rate(env);
 }
@@ -521,7 +527,7 @@ impl FarmingPool {
         env.storage().instance().set(&DataKey::TotalStaked, &0i128);
         env.storage()
             .instance()
-            .set(&DataKey::TotalDistributedCredits, &0i128);
+            .set(&DataKey::TotalCredits, &0i128);
         env.storage()
             .instance()
             .set(&DataKey::SchemaVersion, &SCHEMA_VERSION);
@@ -1337,12 +1343,16 @@ impl FarmingPool {
     pub fn get_boost_config(env: Env, user: Address) -> Result<Option<BoostConfig>, PoolError> {
         require_initialized(&env)?;
         bump_instance(&env);
-        Ok(
-            get_user_boost(&env, &user).map(|allocation_pct| BoostConfig {
-                multiplier: read_global_multiplier(&env),
-                allocation_pct,
-            }),
-        )
+        Ok(Some(BoostConfig {
+            multiplier: read_global_multiplier(&env),
+            allocation_pct: get_user_boost(&env, &user).unwrap_or(0),
+        }))
+    }
+
+    pub fn total_credits(env: Env) -> Result<i128, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(read_total_credits(&env))
     }
 
     /// Set the global credit multiplier. Rejects 0 and anything above

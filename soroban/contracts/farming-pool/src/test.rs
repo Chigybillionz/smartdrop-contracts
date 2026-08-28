@@ -204,6 +204,64 @@ fn test_total_staked_tracks_locked_and_flexible_positions() {
     assert_eq!(t.client.total_staked(), 0);
 }
 
+// ── total_distributed_credits tests ───────────────────────────────────────────
+
+#[test]
+fn test_total_distributed_credits_starts_at_zero() {
+    let t = setup(2, 1);
+    assert_eq!(t.client.total_distributed_credits(), 0);
+}
+
+#[test]
+fn test_total_distributed_credits_counts_banked_stake_accrual_on_checkpoint() {
+    let t = setup(2, 1);
+    t.client.stake(&t.user, &1_000);
+    assert_eq!(t.client.total_distributed_credits(), 0);
+
+    advance_ledgers(&t.env, 10);
+    // Read-only views must not commit anything to the aggregate.
+    assert_eq!(t.client.get_credits(&t.user), 10_000);
+    assert_eq!(t.client.total_distributed_credits(), 0);
+
+    // unstake checkpoints and banks 10_000 credits.
+    let banked = t.client.unstake(&t.user);
+    assert_eq!(banked, 10_000);
+    assert_eq!(t.client.total_distributed_credits(), 10_000);
+}
+
+#[test]
+fn test_total_distributed_credits_counts_position_accrual_on_unlock() {
+    let t = setup_with_lock_period(1, 1, 0);
+    assert_eq!(t.client.total_distributed_credits(), 0);
+
+    t.client.lock_assets(&t.user, &1_000);
+    assert_eq!(t.client.total_distributed_credits(), 0);
+
+    advance_ledgers(&t.env, 10);
+    // Partial unlock checkpoints the position and banks 1_000 * 1 * 10.
+    t.client.unlock_assets(&t.user, &500);
+    assert_eq!(t.client.total_distributed_credits(), 10_000);
+}
+
+#[test]
+fn test_total_distributed_credits_accumulates_across_users_and_systems() {
+    let t = setup(2, 1);
+    let other = Address::generate(&t.env);
+    t.token_sac.mint(&other, &1_000_000_000i128);
+
+    // User A flexible stake: 10 ledgers unbooted → 10_000 credits.
+    t.client.stake(&t.user, &1_000);
+    advance_ledgers(&t.env, 10);
+    t.client.stake(&t.user, &100); // checkpoints 10_000
+    assert_eq!(t.client.total_distributed_credits(), 10_000);
+
+    // User B locked position: 5 more ledgers → 500 credits.
+    t.client.lock_assets(&other, &100);
+    advance_ledgers(&t.env, 5);
+    t.client.unlock_assets(&other, &100); // checkpoints 500
+    assert_eq!(t.client.total_distributed_credits(), 10_500);
+}
+
 #[test]
 fn test_pause_uninitialized_returns_not_initialized() {
     let (_env, client, _user) = setup_uninitialized();
@@ -640,6 +698,31 @@ fn test_admin_multiplier_change_applies_to_existing_stake_without_manual_checkpo
     advance_ledgers(&t.env, 10);
 
     assert_eq!(t.client.get_credits(&t.user), 35_000);
+}
+
+#[test]
+fn test_get_credits_matches_checkpoint_accrual_after_multiplier_change() {
+    // Regression for #223: get_credits and checkpoint must use the same
+    // multiplier source, so an un-checkpointed read equals exactly what the
+    // next checkpointing operation banks.
+    let t = setup(2, 1);
+    t.client.stake(&t.user, &1_000);
+    t.client.set_boost(&t.user, &50u32);
+    advance_ledgers(&t.env, 10);
+
+    t.client.set_global_multiplier(&3u32);
+    advance_ledgers(&t.env, 10);
+
+    // Read-only view: must not mutate stake state.
+    let viewed = t.client.get_credits(&t.user);
+    assert_eq!(viewed, 35_000);
+
+    // unstake checkpoints → banked credits must equal the viewed total.
+    let banked = t.client.unstake(&t.user);
+    assert_eq!(banked, viewed);
+
+    // The aggregate counter must agree with the banked amount too.
+    assert_eq!(t.client.total_distributed_credits(), banked);
 }
 
 #[test]

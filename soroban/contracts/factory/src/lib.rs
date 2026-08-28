@@ -595,6 +595,12 @@ impl Factory {
     /// `global_multiplier`, and `min_lock_period` alongside `pool_id` and
     /// `pool_address` so off-chain indexers can reconstruct the full pool
     /// state without a follow-up RPC call.
+    ///
+    /// On failure, no event is emitted: a validation failure reverts this
+    /// invocation, and Soroban discards contract events published by reverted
+    /// calls. Callers must handle the returned `FactoryError` directly (and,
+    /// off-chain, can monitor for failed creation attempts via failed
+    /// transaction diagnostics rather than contract events).
     pub fn create_pool(
         env: Env,
         asset: Address,

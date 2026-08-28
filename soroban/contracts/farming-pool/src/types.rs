@@ -104,4 +104,6 @@ pub enum DataKey {
     Whitelisted(Address),
     MinStakeAmount,
     TotalStaked,
+    /// Cumulative credits committed to users since pool initialization.
+    TotalDistributedCredits,
 }

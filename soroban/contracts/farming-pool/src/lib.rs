@@ -250,6 +250,18 @@ fn set_banked_credits(env: &Env, user: &Address, totals: BankedCreditTotals) {
     bump_user(env, &key);
 }
 
+fn add_total_distributed_credits(env: &Env, amount: i128) {
+    let total = env
+        .storage()
+        .instance()
+        .get::<DataKey, i128>(&DataKey::TotalDistributedCredits)
+        .unwrap_or(0);
+    env.storage().instance().set(
+        &DataKey::TotalDistributedCredits,
+        &total.checked_add(amount).expect("total credits overflow"),
+    );
+}
+
 fn get_position(env: &Env, user: &Address) -> Option<Position> {
     let key = DataKey::UserPosition(user.clone());
     let value: Option<Position> = env.storage().persistent().get(&key);
@@ -356,7 +368,9 @@ fn compute_stake_accrual(
 
 fn checkpoint(env: &Env, user: &Address, stake: &mut UserStake) {
     let current = env.ledger().sequence();
-    stake.credits_banked += compute_stake_accrual(env, user, stake, current);
+    let accrued = compute_stake_accrual(env, user, stake, current);
+    stake.credits_banked += accrued;
+    add_total_distributed_credits(env, accrued);
     stake.start_ledger = current;
     stake.credit_rate = read_credit_rate(env);
     stake.multiplier = read_global_multiplier(env);
@@ -365,7 +379,9 @@ fn checkpoint(env: &Env, user: &Address, stake: &mut UserStake) {
 fn checkpoint_position(env: &Env, position: &mut Position) {
     let current = env.ledger().sequence();
     let elapsed = current.saturating_sub(position.checkpoint_ledger);
-    position.total_credits += position.amount * position.credit_rate * elapsed as i128;
+    let accrued = position.amount * position.credit_rate * elapsed as i128;
+    position.total_credits += accrued;
+    add_total_distributed_credits(env, accrued);
     position.checkpoint_ledger = current;
     position.credit_rate = read_credit_rate(env);
 }
@@ -424,6 +440,9 @@ impl FarmingPool {
             .instance()
             .set(&DataKey::MinStakeAmount, &min_stake);
         env.storage().instance().set(&DataKey::TotalStaked, &0i128);
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalDistributedCredits, &0i128);
         env.storage()
             .instance()
             .set(&DataKey::SchemaVersion, &SCHEMA_VERSION);
@@ -1166,6 +1185,16 @@ impl FarmingPool {
         Self::min_lock_period_seconds(env)
     }
 
+    /// Return `user`'s total credits across both the locked `Position` and the
+    /// flexible boost `UserStake` systems, plus any banked credits.
+    ///
+    /// For stake credits this runs the same `compute_stake_accrual` math that
+    /// `checkpoint` uses, so `get_credits` and the next checkpointing
+    /// operation always agree: accrual since the last checkpoint is split
+    /// across the `stake.multiplier` snapshot (before the last global
+    /// multiplier change) and the current `read_global_multiplier()` (after
+    /// it). The multiplier source is therefore consistent between the read
+    /// path and the commit path — see `test_admin_multiplier_change_applies_to_existing_stake_without_manual_checkpoint`.
     pub fn get_credits(env: Env, user: Address) -> Result<i128, PoolError> {
         require_initialized(&env)?;
         bump_instance(&env);
@@ -1246,6 +1275,25 @@ impl FarmingPool {
             .storage()
             .instance()
             .get(&DataKey::TotalStaked)
+            .unwrap_or(0))
+    }
+
+    /// Return the cumulative number of credits distributed to all users since
+    /// the pool was initialized.
+    ///
+    /// The counter grows as credits are committed (banked) for users — at each
+    /// `checkpoint`/`checkpoint_position` that occurs on stake, lock, boost,
+    /// unlock, and unstake operations — rather than on every read-only
+    /// accrual view. It therefore always reflects the sum a protocol-wide
+    /// `get_credits` aggregation converges to as users interact, and is the
+    /// companion of `total_staked` for reward-rate and inflation analytics.
+    pub fn total_distributed_credits(env: Env) -> Result<i128, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(env
+            .storage()
+            .instance()
+            .get(&DataKey::TotalDistributedCredits)
             .unwrap_or(0))
     }
 }

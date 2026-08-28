@@ -6,7 +6,7 @@ mod types;
 
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env};
 use types::DataKey;
-pub use types::{AdminTransferred, VestingError};
+pub use types::{AdminTransferred, VestingError, VestingSchedule};
 
 // Persistent-storage TTL: extend to ~60 days if below ~30 days (at ~5 s/ledger).
 const TTL_THRESHOLD: u32 = 518_400;
@@ -307,6 +307,26 @@ impl VestingWallet {
         require_initialized(&env)?;
         bump_instance(&env);
         Ok(compute_vested(&env)? - get_released(&env))
+    }
+
+    /// Return the full vesting schedule parameters in a single call.
+    ///
+    /// Frontends need `beneficiary`, `token`, `total_amount`, `start_ledger`,
+    /// `cliff_ledger`, `end_ledger`, and `revocable` together to render a
+    /// schedule; previously each required a separate read. Returns
+    /// `NotInitialized` if the wallet has not been initialized.
+    pub fn get_vesting_schedule(env: Env) -> Result<VestingSchedule, VestingError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(VestingSchedule {
+            beneficiary: get_beneficiary(&env),
+            token: get_token(&env),
+            total_amount: get_total_amount(&env),
+            start_ledger: get_start_ledger(&env),
+            cliff_ledger: get_cliff_ledger(&env),
+            end_ledger: get_end_ledger(&env),
+            revocable: is_revocable(&env),
+        })
     }
 
     /// Emergency recovery that deliberately bypasses vesting arithmetic.

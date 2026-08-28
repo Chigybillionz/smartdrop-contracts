@@ -2482,3 +2482,38 @@ fn test_staked_user_count_increments_and_decrements_correctly() {
     assert_eq!(t.client.staked_user_count(), 0);
 }
 
+#[test]
+fn test_lock_assets_top_up_extends_unlock_ledger() {
+    let t = setup(1, 10);
+    let start_ledger = t.env.ledger().sequence();
+
+    // Initial lock of 1,000 for 10 ledgers
+    t.client.lock_assets(&t.user, &1_000);
+    let pos1 = t.client.get_user_position(&t.user).unwrap();
+    assert_eq!(pos1.unlock_ledger, start_ledger + 10);
+
+    // Advance ledgers by 5
+    advance_ledgers(&t.env, 5);
+
+    // Top-up lock of 500: fresh lock period extends unlock_ledger to start_ledger + 5 + 10 = start_ledger + 15
+    t.client.lock_assets(&t.user, &500);
+    let pos2 = t.client.get_user_position(&t.user).unwrap();
+    assert_eq!(pos2.amount, 1_500);
+    assert_eq!(pos2.unlock_ledger, start_ledger + 15);
+
+    // Trying to unlock at ledger start_ledger + 12 should fail
+    advance_ledgers(&t.env, 7); // now sequence is start_ledger + 12
+    match t.client.try_unlock_assets(&t.user, &1_500) {
+        Err(Ok(PoolError::MinimumLockNotElapsed)) => {}
+        other => assert!(
+            other.is_err(),
+            "unlock before extended lock period must fail"
+        ),
+    }
+
+    // Advancing past start_ledger + 15 allows full unlock
+    advance_ledgers(&t.env, 3); // now sequence is start_ledger + 15
+    t.client.unlock_assets(&t.user, &1_500);
+}
+
+

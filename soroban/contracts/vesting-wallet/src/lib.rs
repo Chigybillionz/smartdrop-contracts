@@ -375,6 +375,13 @@ impl VestingWallet {
         Ok(())
     }
 
+    /// Return the current admin address.
+    pub fn admin(env: Env) -> Result<Address, VestingError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(get_admin(&env))
+    }
+
     /// Transfer admin rights to `new_admin`. Current admin must authorise.
     pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), VestingError> {
         require_initialized(&env)?;

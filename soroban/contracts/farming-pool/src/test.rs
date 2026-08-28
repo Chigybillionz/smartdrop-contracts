@@ -904,6 +904,32 @@ fn test_additional_stake_checkpoints_credits() {
 fn test_get_credits_zero_without_stake() {
     let t = setup(2, 1);
     assert_eq!(t.client.get_credits(&t.user), 0);
+    assert_eq!(t.client.get_position_credits(&t.user), 0);
+    assert_eq!(t.client.get_stake_credits(&t.user), 0);
+}
+
+#[test]
+fn test_get_position_credits_and_get_stake_credits_distinguish_systems() {
+    let t = setup(2, 1);
+
+    // Flexible stake in UserStake system (1000 tokens, 50% boost at 2x -> effective 1500)
+    t.client.stake(&t.user, &1_000);
+    t.client.set_boost(&t.user, &50u32);
+
+    // Time-locked position in Position system (500 tokens, credit rate 1)
+    t.client.lock_assets(&t.user, &500);
+
+    advance_ledgers(&t.env, 10);
+
+    // Position credits = 500 * 1 * 10 = 5_000
+    assert_eq!(t.client.get_position_credits(&t.user), 5_000);
+    assert_eq!(t.client.calculate_credits(&t.user), 5_000);
+
+    // Stake credits = 1500 * 1 * 10 = 15_000
+    assert_eq!(t.client.get_stake_credits(&t.user), 15_000);
+
+    // Combined get_credits = 5_000 + 15_000 = 20_000
+    assert_eq!(t.client.get_credits(&t.user), 20_000);
 }
 
 // ── lock_assets tests ─────────────────────────────────────────────────────────

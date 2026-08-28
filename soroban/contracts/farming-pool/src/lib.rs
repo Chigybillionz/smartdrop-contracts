@@ -376,12 +376,12 @@ fn checkpoint(env: &Env, user: &Address, stake: &mut UserStake) {
     stake.multiplier = read_global_multiplier(env);
 }
 
-fn checkpoint_position(env: &Env, position: &mut Position) {
+fn checkpoint_position(env: &Env, user: &Address, position: &mut Position) {
     let current = env.ledger().sequence();
     let elapsed = current.saturating_sub(position.checkpoint_ledger);
-    let accrued = position.amount * position.credit_rate * elapsed as i128;
-    position.total_credits += accrued;
-    add_total_distributed_credits(env, accrued);
+    let allocation_pct = get_user_boost(env, user).unwrap_or(0);
+    let effective_amount = compute_total_stake(position.amount, allocation_pct, read_global_multiplier(env));
+    position.total_credits += effective_amount * position.credit_rate * elapsed as i128;
     position.checkpoint_ledger = current;
     position.credit_rate = read_credit_rate(env);
 }
@@ -574,7 +574,7 @@ impl FarmingPool {
 
         let current = env.ledger().sequence();
         let mut position = if let Some(mut existing) = get_position(&env, &user) {
-            checkpoint_position(&env, &mut existing);
+            checkpoint_position(&env, &user, &mut existing);
             existing.amount += amount;
             let fresh_unlock = current.saturating_add(read_min_lock_period(&env));
             existing.unlock_ledger = existing.unlock_ledger.max(fresh_unlock);
@@ -613,7 +613,7 @@ impl FarmingPool {
 
         env.events().publish(
             (symbol_short!("pool"), symbol_short!("locked")),
-            (user, amount),
+            (user, amount, position.unlock_ledger),
         );
         Ok(())
     }
@@ -635,7 +635,7 @@ impl FarmingPool {
             "minimum lock period not elapsed"
         );
 
-        checkpoint_position(&env, &mut position);
+        checkpoint_position(&env, &user, &mut position);
         let total_credits = position.total_credits;
         position.amount -= amount;
 
@@ -670,6 +670,10 @@ impl FarmingPool {
         Ok(())
     }
 
+    /// Calculate current accrued credits specifically for the time-locked `Position` staking system.
+    ///
+    /// See also `get_position_credits` (an explicit alias for this function) and `get_credits`
+    /// (which calculates combined credits across both `Position` and `UserStake` systems).
     pub fn calculate_credits(env: Env, user: Address) -> Result<i128, PoolError> {
         require_initialized(&env)?;
         bump_instance(&env);
@@ -681,7 +685,16 @@ impl FarmingPool {
             .ledger()
             .sequence()
             .saturating_sub(position.checkpoint_ledger);
-        Ok(position.total_credits + position.amount * position.credit_rate * elapsed as i128)
+        let allocation_pct = get_user_boost(&env, &user).unwrap_or(0);
+        let effective_amount = compute_total_stake(position.amount, allocation_pct, read_global_multiplier(&env));
+        Ok(position.total_credits + effective_amount * position.credit_rate * elapsed as i128)
+    }
+
+    /// Return current accrued credits for a user's time-locked `Position`.
+    ///
+    /// Alias for `calculate_credits` providing explicit system-specific naming.
+    pub fn get_position_credits(env: Env, user: Address) -> Result<i128, PoolError> {
+        Self::calculate_credits(env, user)
     }
 
     pub fn get_user_position(env: Env, user: Address) -> Result<Option<Position>, PoolError> {
@@ -692,7 +705,9 @@ impl FarmingPool {
         };
         let current = env.ledger().sequence();
         let elapsed = current.saturating_sub(position.checkpoint_ledger);
-        position.total_credits += position.amount * position.credit_rate * elapsed as i128;
+        let allocation_pct = get_user_boost(&env, &user).unwrap_or(0);
+        let effective_amount = compute_total_stake(position.amount, allocation_pct, read_global_multiplier(&env));
+        position.total_credits += effective_amount * position.credit_rate * elapsed as i128;
         position.checkpoint_ledger = current;
         position.credit_rate = read_credit_rate(&env);
         Ok(Some(position))
@@ -770,9 +785,22 @@ impl FarmingPool {
 
     /// Withdraw staked/locked tokens during emergency when pool is paused.
     ///
-    /// Allows users to self-withdraw their assets during a pause without requiring
-    /// admin intervention. Requires authorization from `user`. Checkpoints and preserves
-    /// accrued credit totals in `BankedCredits`.
+    /// Allows users to withdraw their staked/locked assets during an emergency pause.
+    /// Requires authorization from `user`. Checkpoints and preserves accrued credit
+    /// totals in `BankedCredits`.
+    ///
+    /// # Usage & Operational Guidelines
+    /// - **When to Use**: Called during emergency situations or protocol maintenance when
+    ///   the contract has been explicitly paused via `pause()`.
+    /// - **Credit Preservation**: Staked/locked assets are returned in full while accrued
+    ///   credits are safely preserved in `BankedCredits` split between `position_credits`
+    ///   and `stake_credits` (see `get_banked_credits_split`). Users do not forfeit earned credits.
+    /// - **User Notification & Off-Chain Tracking**: Every emergency withdrawal emits an
+    ///   on-chain `("pool", "emrg_exit")` event with payload `(admin, user, total_returned)`.
+    ///   Indexers and frontends notify users of emergency exit transactions by monitoring this topic.
+    /// - **Audit Requirements & Privilege Governance**: Because emergency mechanisms handle pool
+    ///   assets during security pauses, all admin actions initiating pauses and emergency exits must
+    ///   be logged to immutable audit trails and governed by multi-sig or timelock controls.
     pub fn emergency_withdraw(env: Env, user: Address) -> Result<i128, PoolError> {
         user.require_auth();
         require_initialized(&env)?;
@@ -1185,16 +1213,29 @@ impl FarmingPool {
         Self::min_lock_period_seconds(env)
     }
 
-    /// Return `user`'s total credits across both the locked `Position` and the
-    /// flexible boost `UserStake` systems, plus any banked credits.
+    /// Return current accrued credits specifically for a user's `UserStake` (boost/continuous staking system).
     ///
-    /// For stake credits this runs the same `compute_stake_accrual` math that
-    /// `checkpoint` uses, so `get_credits` and the next checkpointing
-    /// operation always agree: accrual since the last checkpoint is split
-    /// across the `stake.multiplier` snapshot (before the last global
-    /// multiplier change) and the current `read_global_multiplier()` (after
-    /// it). The multiplier source is therefore consistent between the read
-    /// path and the commit path — see `test_admin_multiplier_change_applies_to_existing_stake_without_manual_checkpoint`.
+    /// Includes both live accrual for the active stake and banked stake credits from previous withdrawals.
+    pub fn get_stake_credits(env: Env, user: Address) -> Result<i128, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        let banked = Self::get_banked_credits_split(env.clone(), user.clone())?;
+
+        let stake_credits = get_user_stake(&env, &user)
+            .map(|stake| {
+                stake.credits_banked
+                    + compute_stake_accrual(&env, &user, &stake, env.ledger().sequence())
+            })
+            .unwrap_or(0);
+
+        Ok(banked.stake_credits + stake_credits)
+    }
+
+    /// Return total combined accrued credits for `user` across all staking systems.
+    ///
+    /// Merges credits from time-locked `Position` staking, flexible `UserStake` boost staking,
+    /// and prior `BankedCredits`. To query individual systems, see `get_position_credits`
+    /// (`calculate_credits`) and `get_stake_credits`.
     pub fn get_credits(env: Env, user: Address) -> Result<i128, PoolError> {
         require_initialized(&env)?;
         bump_instance(&env);
@@ -1206,8 +1247,10 @@ impl FarmingPool {
                     .ledger()
                     .sequence()
                     .saturating_sub(position.checkpoint_ledger);
+                let allocation_pct = get_user_boost(&env, &user).unwrap_or(0);
+                let effective_amount = compute_total_stake(position.amount, allocation_pct, read_global_multiplier(&env));
                 position.total_credits
-                    + position.amount * position.credit_rate * elapsed as i128
+                    + effective_amount * position.credit_rate * elapsed as i128
             })
             .unwrap_or(0);
 

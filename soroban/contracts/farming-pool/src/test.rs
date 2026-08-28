@@ -2450,3 +2450,35 @@ fn test_emergency_withdraw_reverts_entirely_if_stake_token_naively_reenters() {
     let stake = client.get_stake(&user).unwrap();
     assert_eq!(stake.amount, 300);
 }
+
+#[test]
+fn test_staked_user_count_increments_and_decrements_correctly() {
+    let t = setup(1, 10);
+    assert_eq!(t.client.staked_user_count(), 0);
+    assert_eq!(t.client.get_staked_user_count(), 0);
+
+    let user2 = Address::generate(&t.env);
+    t.token_admin_client.mint(&user2, &10_000);
+
+    // User 1 stakes: count becomes 1
+    t.client.stake(&t.user, &1_000);
+    assert_eq!(t.client.staked_user_count(), 1);
+
+    // User 1 stakes more: count stays 1
+    t.client.stake(&t.user, &500);
+    assert_eq!(t.client.staked_user_count(), 1);
+
+    // User 2 locks position: count becomes 2
+    t.client.lock_assets(&user2, &2_000);
+    assert_eq!(t.client.staked_user_count(), 2);
+
+    // User 1 unstakes completely: count becomes 1
+    t.client.unstake(&t.user);
+    assert_eq!(t.client.staked_user_count(), 1);
+
+    // User 2 unlocks position completely: count becomes 0
+    advance_ledgers(&t.env, 10);
+    t.client.unlock_assets(&user2, &2_000);
+    assert_eq!(t.client.staked_user_count(), 0);
+}
+

@@ -244,6 +244,34 @@ fn subtract_total_staked(env: &Env, amount: i128) {
     );
 }
 
+fn is_user_staked(env: &Env, user: &Address) -> bool {
+    get_position(env, user).is_some() || get_user_stake(env, user).is_some()
+}
+
+fn increment_staked_user_count(env: &Env) {
+    let count: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::StakedUserCount)
+        .unwrap_or(0);
+    env.storage()
+        .instance()
+        .set(&DataKey::StakedUserCount, &(count + 1));
+}
+
+fn decrement_staked_user_count(env: &Env) {
+    let count: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::StakedUserCount)
+        .unwrap_or(0);
+    if count > 0 {
+        env.storage()
+            .instance()
+            .set(&DataKey::StakedUserCount, &(count - 1));
+    }
+}
+
 fn set_banked_credits(env: &Env, user: &Address, totals: BankedCreditTotals) {
     let key = DataKey::BankedCredits(user.clone());
     env.storage().persistent().set(&key, &totals);
@@ -553,6 +581,7 @@ impl FarmingPool {
 
         bump_instance(&env);
 
+        let was_staked = is_user_staked(&env, &user);
         let current = env.ledger().sequence();
         let mut position = if let Some(mut existing) = get_position(&env, &user) {
             checkpoint_position(&env, &mut existing);
@@ -583,6 +612,9 @@ impl FarmingPool {
         // rolled back with it — Soroban's per-invocation atomicity, not
         // manual sequencing, is what keeps this safe on failure. See #69.
         set_position(&env, &user, &position);
+        if !was_staked && is_user_staked(&env, &user) {
+            increment_staked_user_count(&env);
+        }
         add_total_staked(&env, amount);
 
         let stake_token = get_stake_token(&env)?;
@@ -607,6 +639,7 @@ impl FarmingPool {
         assert!(amount > 0, "amount must be positive");
         bump_instance(&env);
 
+        let was_staked = is_user_staked(&env, &user);
         let mut position = get_position(&env, &user).expect("no active position");
         assert!(amount <= position.amount, "insufficient locked balance");
 
@@ -634,6 +667,9 @@ impl FarmingPool {
             remove_position(&env, &user);
         } else {
             set_position(&env, &user, &position);
+        }
+        if was_staked && !is_user_staked(&env, &user) {
+            decrement_staked_user_count(&env);
         }
         subtract_total_staked(&env, amount);
 
@@ -763,6 +799,7 @@ impl FarmingPool {
         }
         bump_instance(&env);
 
+        let was_staked = is_user_staked(&env, &user);
         let mut total_returned = 0i128;
         let mut position_credits = 0i128;
         let mut stake_credits = 0i128;
@@ -783,6 +820,10 @@ impl FarmingPool {
             subtract_total_staked(&env, stake.amount);
             stake_credits = stake.credits_banked;
             remove_user_stake(&env, &user);
+        }
+
+        if was_staked && !is_user_staked(&env, &user) {
+            decrement_staked_user_count(&env);
         }
 
         if total_returned == 0 {
@@ -961,6 +1002,7 @@ impl FarmingPool {
 
         bump_instance(&env);
 
+        let was_staked = is_user_staked(&env, &from);
         let current = env.ledger().sequence();
         let mut new_stake = if let Some(mut existing) = get_user_stake(&env, &from) {
             checkpoint(&env, &from, &mut existing);
@@ -981,6 +1023,9 @@ impl FarmingPool {
         // Checks-effects-interactions: persist state *before* the external
         // token transfer below, consistent with `lock_assets`. See #69.
         set_user_stake(&env, &from, &new_stake);
+        if !was_staked && is_user_staked(&env, &from) {
+            increment_staked_user_count(&env);
+        }
         add_total_staked(&env, amount);
 
         // Pull tokens from caller into the contract.
@@ -1011,6 +1056,7 @@ impl FarmingPool {
         require_withdrawals_not_paused(&env)?;
         bump_instance(&env);
 
+        let was_staked = is_user_staked(&env, &from);
         let mut stake = get_user_stake(&env, &from).expect("no active stake");
         checkpoint(&env, &from, &mut stake);
         let total_credits = stake.credits_banked;
@@ -1029,6 +1075,9 @@ impl FarmingPool {
         );
 
         remove_user_stake(&env, &from);
+        if was_staked && !is_user_staked(&env, &from) {
+            decrement_staked_user_count(&env);
+        }
         subtract_total_staked(&env, stake.amount);
         Ok(total_credits)
     }
@@ -1247,6 +1296,20 @@ impl FarmingPool {
             .instance()
             .get(&DataKey::TotalStaked)
             .unwrap_or(0))
+    }
+
+    pub fn staked_user_count(env: Env) -> Result<u32, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(env
+            .storage()
+            .instance()
+            .get(&DataKey::StakedUserCount)
+            .unwrap_or(0))
+    }
+
+    pub fn get_staked_user_count(env: Env) -> Result<u32, PoolError> {
+        Self::staked_user_count(env)
     }
 }
 

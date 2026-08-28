@@ -3,7 +3,8 @@
 mod types;
 
 use soroban_sdk::{
-    contract, contractimpl, symbol_short, vec, Address, BytesN, Env, IntoVal, Symbol, Val, Vec,
+    contract, contractimpl, symbol_short, vec, Address, BytesN, Env, IntoVal, String, Symbol, Val,
+    Vec,
 };
 use types::{DataKey, FactoryError, ListPoolsResponse, PoolRecord, PoolSort};
 
@@ -20,6 +21,8 @@ const LEDGERS_PER_DAY: u128 = 17_280;
 // Minimum stake in the asset's smallest units. This is 0.1 token for the
 // standard 7-decimal Stellar asset convention and prevents dust positions.
 const MIN_STAKE_AMOUNT: i128 = 1_000_000;
+// Minimum lock period in ledgers required to prevent flash-loan-style attacks.
+const MIN_LOCK_PERIOD: u32 = 1;
 
 /// Convert a "credits per day" figure into the deployed pool's native
 /// "credits per ledger" `credit_rate`.
@@ -99,6 +102,14 @@ fn load_wasm_hash(env: &Env) -> Result<BytesN<32>, FactoryError> {
         .ok_or(FactoryError::NotInitialized)
 }
 
+/// Read the running count of successful `upgrade_pool` calls (#258).
+fn read_upgrade_count(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::UpgradeCount)
+        .unwrap_or(0)
+}
+
 /// Build a 32-byte salt from a pool ID so each pool gets a unique, reproducible address.
 fn pool_salt(env: &Env, pool_id: u32) -> BytesN<32> {
     let mut bytes = [0u8; 32];
@@ -128,15 +139,11 @@ fn sort_precedes(sort: PoolSort, left: &(u32, PoolRecord), right: &(u32, PoolRec
     ordering.is_lt() || (ordering.is_eq() && left.0 < right.0)
 }
 
-fn insert_sorted(
-    records: &mut Vec<(u32, PoolRecord)>,
-    record: (u32, PoolRecord),
-    sort: PoolSort,
-) {
-    let mut insert_at = records.len();
+fn insert_sorted(records: &mut Vec<(u32, PoolRecord)>, record: (u32, PoolRecord), sort: PoolSort) {
+    let mut insert_at: u32 = records.len();
     for (index, existing) in records.iter().enumerate() {
         if sort_precedes(sort, &record, &existing) {
-            insert_at = index;
+            insert_at = index as u32;
             break;
         }
     }
@@ -160,6 +167,9 @@ impl Factory {
     ) -> Result<(), FactoryError> {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(FactoryError::AlreadyInitialized);
+        }
+        if pool_wasm_hash == BytesN::from_array(&env, &[0u8; 32]) {
+            return Err(FactoryError::InvalidWasmHash);
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage()
@@ -212,6 +222,13 @@ impl Factory {
     ///
     /// Returns `NotInitialized` if the factory has not been initialized, or
     /// `PoolNotFound` if `pool_id` has not been created yet.
+    ///
+    /// # TTL keep-alive
+    /// On success, extends the persistent TTL of the requested pool record (and
+    /// the factory instance) when remaining TTL falls below `TTL_THRESHOLD`.
+    /// Pools that are never individually queried should be kept alive via
+    /// paginated `list_pools` reads, asset-range queries, or the permissionless
+    /// `refresh_pool_ttls` function.
     pub fn get_pool(env: Env, pool_id: u32) -> Result<PoolRecord, FactoryError> {
         require_initialized(&env)?;
         bump_instance(&env);
@@ -232,6 +249,15 @@ impl Factory {
     ///
     /// Guarded like `pool_count`: an empty page from an uninitialized factory
     /// would be indistinguishable from an initialized but empty registry.
+    ///
+    /// # TTL keep-alive
+    /// Extends the persistent TTL of every pool record returned in this page
+    /// (plus the factory instance). Unlike `get_pool`, which bumps one record
+    /// per call, each paginated read refreshes all pools in the window. Indexers
+    /// that page through the registry therefore keep listed pools alive more
+    /// aggressively than pools accessed only via `get_pool(id)`. For deliberate
+    /// full-registry maintenance independent of read patterns, use
+    /// `refresh_pool_ttls`.
     ///
     /// Returns `NotInitialized` if the factory has not been initialized.
     pub fn list_pools(
@@ -258,10 +284,12 @@ impl Factory {
             }
         }
 
+        let has_more = end < count;
         Ok(ListPoolsResponse {
             records,
             next_start_id: if end < count { end } else { count },
             total: count,
+            has_more,
         })
     }
 
@@ -298,10 +326,12 @@ impl Factory {
             }
         }
 
+        let has_more = end < count;
         Ok(ListPoolsResponse {
             records,
             next_start_id: if end < count { end } else { count },
             total: count,
+            has_more,
         })
     }
 
@@ -394,10 +424,12 @@ impl Factory {
             }
         }
 
+        let has_more = next_start_id < count;
         Ok(ListPoolsResponse {
             records,
             next_start_id,
             total: count,
+            has_more,
         })
     }
 
@@ -443,7 +475,33 @@ impl Factory {
     /// Operators should call this function across the full ID range at least once
     /// every ~45 days (between TTL_THRESHOLD of ~30 days and TTL_EXTEND_TO of
     /// ~60 days) to ensure all pool records remain accessible.
+    ///
+    /// # Security implications of being permissionless (#168)
+    /// Any caller may extend pool-record TTLs. The blast radius is intentionally
+    /// bounded and non-hazardous:
+    /// - A refresh only **extends** TTLs; it can never shorten them, prune
+    ///   records, or mutate pool data. It therefore cannot corrupt state.
+    /// - Each call is capped at 20 pool IDs and fees are paid by the caller, so
+    ///   an attacker cannot cheaply undercut rational keepers nor permanently
+    ///   pin a pool against archival — every ~45-day cycle requires a fresh
+    ///   low-value call and re-accruing storage rent.
+    /// - Pool records that should be retired are at most kept alive (not
+    ///   protected in any other way): they remain stale and can be ignored by
+    ///   frontends, and the pool's on-chain asset transfers are unaffected.
+    /// - The maximum consequential cost of abuse is bounded storage-rent for
+    ///   stale records, which is recovered through fees paid by the refresher.
+    ///
+    /// This is why the function deliberately remains permissionless: an
+    /// admin-gated or rate-limited variant would reintroduce the archival risk
+    /// it exists to prevent (a factory whose only keep-alive relies on a single
+    /// admin becomes a single point of failure). For pools that must be
+    /// decommissioned, the durable admin path is to stop refreshing them and
+    /// let their TTL lapse, or archive/white-list them off-chain rather than
+    /// relying on attacker interference.
+    ///
+    /// Returns `NotInitialized` if the factory has not been initialized.
     pub fn refresh_pool_ttls(env: Env, start_id: u32, limit: u32) -> Result<(), FactoryError> {
+        require_initialized(&env)?;
         bump_instance(&env);
         let count: u32 = env
             .storage()
@@ -457,6 +515,10 @@ impl Factory {
                 bump_pool(&env, pool_id);
             }
         }
+        env.events().publish(
+            (symbol_short!("factory"), symbol_short!("ttl_ref")),
+            (start_id, end),
+        );
         Ok(())
     }
 
@@ -529,6 +591,9 @@ impl Factory {
         if pool_admin != admin {
             return Err(FactoryError::PoolAdminMismatch);
         }
+        if new_wasm_hash == record.wasm_hash {
+            return Err(FactoryError::PoolUpgradeFailed);
+        }
 
         let upgrade_args: Vec<Val> = vec![&env, new_wasm_hash.clone().into_val(&env)];
         let upgrade_res = env.try_invoke_contract::<(), soroban_sdk::Error>(
@@ -545,6 +610,10 @@ impl Factory {
         record.wasm_hash = new_wasm_hash.clone();
         env.storage().persistent().set(&key, &record);
 
+        env.storage()
+            .instance()
+            .set(&DataKey::UpgradeCount, &read_upgrade_count(&env).saturating_add(1));
+
         #[allow(deprecated)]
         env.events().publish(
             (symbol_short!("factory"), symbol_short!("pool_upg")),
@@ -554,11 +623,21 @@ impl Factory {
         Ok(())
     }
 
+    /// Total number of successful `upgrade_pool` calls performed by this
+    /// factory, for pool-version tracking and analytics (#258).
+    pub fn upgrade_count(env: Env) -> Result<u32, FactoryError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(read_upgrade_count(&env))
+    }
+
     /// Update the WASM hash used for future `create_pool` deployments. Admin-only.
     ///
     /// Allows the admin to point future pool deployments at a corrected or upgraded
     /// farming-pool build without redeploying the factory itself. Existing deployed
     /// pools are unaffected — Soroban contract bytecode is immutable once deployed.
+    /// Validates that `new_hash` is non-zero. Callers/admins must verify that the target
+    /// WASM has been uploaded to the chain before calling this function.
     ///
     /// Emits a `wasm_set` event with `(old_hash, new_hash)` so that the previous
     /// hash is discoverable off-chain for rollback scenarios.
@@ -568,6 +647,10 @@ impl Factory {
         admin.require_auth();
         bump_instance(&env);
 
+        if new_hash == BytesN::from_array(&env, &[0u8; 32]) {
+            return Err(FactoryError::InvalidWasmHash);
+        }
+
         let old_hash: BytesN<32> = env.storage().instance().get(&DataKey::WasmHash).unwrap();
         env.storage().instance().set(&DataKey::WasmHash, &new_hash);
         #[allow(deprecated)]
@@ -576,6 +659,54 @@ impl Factory {
             (old_hash, new_hash),
         );
         Ok(())
+    }
+
+    /// Pause pool creation. Admin-only.
+    ///
+    /// Prevents future `create_pool` calls during maintenance or security emergencies.
+    /// Emits a `pause_cr` event.
+    pub fn pause_pool_creation(env: Env) -> Result<(), FactoryError> {
+        require_initialized(&env)?;
+        let admin = load_admin(&env)?;
+        admin.require_auth();
+        bump_instance(&env);
+
+        env.storage()
+            .instance()
+            .set(&DataKey::PoolCreationPaused, &true);
+        #[allow(deprecated)]
+        env.events()
+            .publish((symbol_short!("factory"), symbol_short!("pause_cr")), admin);
+        Ok(())
+    }
+
+    /// Resume pool creation. Admin-only.
+    ///
+    /// Allows `create_pool` calls after a pause. Emits an `unps_cr` event.
+    pub fn unpause_pool_creation(env: Env) -> Result<(), FactoryError> {
+        require_initialized(&env)?;
+        let admin = load_admin(&env)?;
+        admin.require_auth();
+        bump_instance(&env);
+
+        env.storage()
+            .instance()
+            .set(&DataKey::PoolCreationPaused, &false);
+        #[allow(deprecated)]
+        env.events()
+            .publish((symbol_short!("factory"), symbol_short!("unps_cr")), admin);
+        Ok(())
+    }
+
+    /// Return whether pool creation is currently paused.
+    pub fn is_pool_creation_paused(env: Env) -> Result<bool, FactoryError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(env
+            .storage()
+            .instance()
+            .get(&DataKey::PoolCreationPaused)
+            .unwrap_or(false))
     }
 
     /// Create, deploy, and initialize a new farming pool. Admin-only.
@@ -602,6 +733,12 @@ impl Factory {
     /// `global_multiplier`, and `min_lock_period` alongside `pool_id` and
     /// `pool_address` so off-chain indexers can reconstruct the full pool
     /// state without a follow-up RPC call.
+    ///
+    /// On failure, no event is emitted: a validation failure reverts this
+    /// invocation, and Soroban discards contract events published by reverted
+    /// calls. Callers must handle the returned `FactoryError` directly (and,
+    /// off-chain, can monitor for failed creation attempts via failed
+    /// transaction diagnostics rather than contract events).
     pub fn create_pool(
         env: Env,
         asset: Address,
@@ -614,6 +751,16 @@ impl Factory {
         let admin = load_admin(&env)?;
         admin.require_auth();
         bump_instance(&env);
+
+        let paused: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::PoolCreationPaused)
+            .unwrap_or(false);
+        if paused {
+            return Err(FactoryError::PoolCreationPaused);
+        }
+
         validate_asset(&env, &asset)?;
 
         if global_multiplier < 1 {
@@ -623,6 +770,9 @@ impl Factory {
         let min_lock_period: u32 = min_lock_period
             .try_into()
             .map_err(|_| FactoryError::MinLockPeriodOutOfRange)?;
+        if min_lock_period < MIN_LOCK_PERIOD {
+            return Err(FactoryError::MinLockPeriodTooShort);
+        }
         let effective_min_stake = if min_stake_amount <= 0 {
             MIN_STAKE_AMOUNT
         } else {
@@ -644,7 +794,7 @@ impl Factory {
         let pool_address = env
             .deployer()
             .with_current_contract(salt)
-            .deploy_v2(wasm_hash, ());
+            .deploy_v2(wasm_hash.clone(), ());
 
         // Call the freshly deployed pool's `initialize` directly via
         // `invoke_contract` rather than depending on the `farming-pool`

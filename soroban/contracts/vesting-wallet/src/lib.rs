@@ -6,7 +6,7 @@ mod types;
 
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env};
 use types::DataKey;
-pub use types::{AdminTransferred, VestingError};
+pub use types::{AdminTransferred, VestingError, VestingSchedule};
 
 // Persistent-storage TTL: extend to ~60 days if below ~30 days (at ~5 s/ledger).
 const TTL_THRESHOLD: u32 = 518_400;
@@ -158,6 +158,10 @@ impl VestingWallet {
             return Err(VestingError::AlreadyInitialized);
         }
         assert!(total_amount > 0, "total_amount must be positive");
+        assert!(
+            start_ledger >= env.ledger().sequence(),
+            "start must be in the future"
+        );
         assert!(cliff_ledger >= start_ledger, "cliff must be >= start");
         assert!(end_ledger > cliff_ledger, "end must be > cliff");
         let duration = i128::from(end_ledger - start_ledger);
@@ -187,6 +191,7 @@ impl VestingWallet {
             .instance()
             .set(&DataKey::Revocable, &revocable);
         env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::Funder, &admin);
         env.storage()
             .instance()
             .set(&DataKey::ReleasedAmount, &0i128);
@@ -243,11 +248,14 @@ impl VestingWallet {
         Ok(releasable)
     }
 
-    /// Admin: cancel the unvested portion and return it to admin.
+    /// Admin: cancel the unvested portion and return it to the original funder.
     ///
     /// Only callable when `revocable = true`. Tokens vested at the time of the
     /// call remain claimable by the beneficiary via `release()`. The unvested
-    /// remainder is transferred back to admin immediately.
+    /// remainder is transferred back to the funder (the address that funded the
+    /// vesting schedule at initialization), not the current admin. This ensures
+    /// that if admin rights were transferred via `transfer_admin`, the original
+    /// funder still receives their unvested tokens.
     pub fn revoke(env: Env) -> Result<(), VestingError> {
         require_initialized(&env)?;
         if !is_revocable(&env) {
@@ -261,6 +269,7 @@ impl VestingWallet {
         admin.require_auth();
         bump_instance(&env);
 
+        let funder: Address = env.storage().instance().get(&DataKey::Funder).unwrap();
         let vested = compute_vested(&env)?;
         let total = get_total_amount(&env);
         let unvested = total - vested;
@@ -274,7 +283,7 @@ impl VestingWallet {
         if unvested > 0 {
             token::TokenClient::new(&env, &get_token(&env)).transfer(
                 &env.current_contract_address(),
-                &admin,
+                &funder,
                 &unvested,
             );
         }
@@ -307,6 +316,39 @@ impl VestingWallet {
         require_initialized(&env)?;
         bump_instance(&env);
         Ok(compute_vested(&env)? - get_released(&env))
+    }
+
+    /// Return the full vesting schedule parameters in a single call.
+    ///
+    /// Frontends need `beneficiary`, `token`, `total_amount`, `start_ledger`,
+    /// `cliff_ledger`, `end_ledger`, and `revocable` together to render a
+    /// schedule; previously each required a separate read. Returns
+    /// `NotInitialized` if the wallet has not been initialized.
+    pub fn get_vesting_schedule(env: Env) -> Result<VestingSchedule, VestingError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(VestingSchedule {
+            beneficiary: get_beneficiary(&env),
+            token: get_token(&env),
+            total_amount: get_total_amount(&env),
+            start_ledger: get_start_ledger(&env),
+            cliff_ledger: get_cliff_ledger(&env),
+            end_ledger: get_end_ledger(&env),
+            revocable: is_revocable(&env),
+        })
+    }
+
+    /// Returns `(start_ledger, cliff_ledger, end_ledger)` in a single read for
+    /// frontends that render the vesting schedule (#256). Returns
+    /// `NotInitialized` if the wallet has not been initialized.
+    pub fn vesting_dates(env: Env) -> Result<(u32, u32, u32), VestingError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok((
+            get_start_ledger(&env),
+            get_cliff_ledger(&env),
+            get_end_ledger(&env),
+        ))
     }
 
     /// Emergency recovery that deliberately bypasses vesting arithmetic.
@@ -353,6 +395,13 @@ impl VestingWallet {
             .set(&DataKey::Beneficiary, &new_beneficiary);
 
         Ok(())
+    }
+
+    /// Return the current admin address.
+    pub fn admin(env: Env) -> Result<Address, VestingError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(get_admin(&env))
     }
 
     /// Transfer admin rights to `new_admin`. Current admin must authorise.

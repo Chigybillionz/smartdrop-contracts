@@ -1,4 +1,4 @@
-use soroban_sdk::{contracterror, contracttype, Address};
+use soroban_sdk::{contracterror, contracttype, Address, Vec};
 
 /// Error codes returned by the farming pool contract.
 #[contracterror]
@@ -20,6 +20,8 @@ pub enum PoolError {
     Paused = 10,
     /// Returned by `accept_admin` when no admin handoff is pending.
     NoPendingAdmin = 11,
+    /// Returned by `batch_add_to_whitelist` or `batch_remove_from_whitelist` when batch exceeds 50 users.
+    BatchTooLarge = 12,
 }
 
 /// Per-user boost configuration returned by `get_boost_config`.
@@ -92,6 +94,9 @@ pub enum DataKey {
     MinLockPeriod,
     SchemaVersion,
     Paused,
+    PausedStaking,
+    PausedWithdrawals,
+    GlobalMultiplierChangeLedger,
     UserBoost(Address),
     UserStake(Address),
     UserPosition(Address),
@@ -99,6 +104,8 @@ pub enum DataKey {
     // Whitelist keys
     WhitelistEnabled,
     Whitelisted(Address),
+    /// Ordered list of all currently whitelisted addresses (instance storage).
+    WhitelistedUsers,
     MinStakeAmount,
     TotalStaked,
     TotalCredits,

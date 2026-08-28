@@ -23,7 +23,7 @@ Both systems can coexist within the same deployed pool instance, and users may p
 | **Partial Withdrawal** | Supported (amount <= locked amount) | Full unstake of current balance |
 | **Boost Multipliers** | Fixed standard accrual | Configurable boost via `set_boost(allocation_pct)` |
 | **Credit Rate Snapshot** | Checkpointed in `checkpoint_ledger` | Checkpointed in `start_ledger` |
-| **Credit Calculation** | `calculate_credits(user)` | `get_credits(user)` |
+| **Credit Calculation** | `calculate_credits(user)` / `get_position_credits(user)` | `get_stake_credits(user)` (`get_credits(user)` for combined total) |
 | **Emitted Events** | `(pool, locked)`, `(pool, unlocked)` | None (governed via token/boost events) |
 
 ---
@@ -54,11 +54,25 @@ Where $\Delta\text{ledgers} = \text{current\_ledger} - \text{start\_ledger}$.
 
 ## 4. Emergency Withdrawals & Pause Lifecycle
 
-When unexpected market conditions or upgrades require pausing a pool (`pause()`), normal deposits and withdrawals (`lock_assets`, `unlock_assets`, `stake`, `unstake`) are halted to protect contract invariants.
+When unexpected market conditions, contract upgrades, or security events require pausing a pool (`pause()`), normal deposits and withdrawals (`lock_assets`, `unlock_assets`, `stake`, `unstake`) are halted to protect contract invariants.
 
-- **User Self-Withdrawal**: Users can call `emergency_withdraw(user)` directly while the pool is paused.
+- **Trigger Conditions**: `emergency_withdraw(user)` can only be executed while the pool is paused (`pool_is_paused`).
+- **User Self-Withdrawal**: Users can call `emergency_withdraw(user)` directly while the pool is paused, requiring caller authorization (`user.require_auth()`).
 - **Atomic Exit**: All locked tokens in `Position` and staked tokens in `UserStake` are transferred back to the user in a single atomic transaction.
 - **Accrual History Preservation**: Accrued credits are preserved in `BankedCredits` under `BankedCreditTotals { position_credits, stake_credits }`, allowing users and indexers to inspect credits earned prior to the emergency exit via `get_banked_credits_split(user)` and `get_banked_credits(user)`.
+- **User Notification**: Every call emits an on-chain `(symbol_short!("pool"), symbol_short!("emrg_exit"))` event with payload `(admin, user, total_returned)`. Off-chain indexers monitor this event topic to alert affected users.
+- **Audit Requirements & Privilege Controls**: Because emergency operations allow user capital exits during security pauses, all admin calls toggling pause state or executing emergency workflows MUST produce immutable event logs and be controlled via multi-signature accounts or time-locked governance contracts.
+
+---
+
+## 4a. Why the Boost/Stake system has no minimum lock period
+
+The flexible `UserStake` system deliberately does **not** enforce a lock period like the `Position` system does (`stake`/`unstake` vs `lock_assets`/`unlock_assets`). This is a documented design decision, not an oversight ([#169](https://github.com/SmartDropLabs/smartdrop-contracts/issues/169)):
+
+- **Different product purpose**: the lock system commits deposits for a minimum duration; the boost/stake system exists for *continuous flexible staking* where a lock would defeat its purpose.
+- **No leverage, no flash-staking reward**: a stake is not a loan — `unstake` returns only the exact staked principal. Credits accrue **linearly over elapsed ledgers** (`compute_stake_accrual`), with checkpoints on both `stake` and `unstake`, so an immediate stake→unstake round-trip banks ~0 credits. There is no fixed up-front reward to harvest.
+- **Bounded exposure**: the maximum "harm" of free stake/unstake is per-transaction gas, which the caller pays. The contract never over-commits liabilities beyond staked amounts.
+- **Guidance**: pools that need a commitment lock should rely on the `Position` system; pools that want flexible boosted staking use the stake system as-is. If a future product needs a locked *boosted* stake, add a separate opt-in `min_stake_lock_period` parameter rather than coupling the two model.
 
 ---
 

@@ -612,6 +612,18 @@
                       "key": {
                         "vec": [
                           {
+                            "symbol": "TotalStaked"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "i128": "1500"
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
                             "symbol": "WhitelistEnabled"
                           }
                         ]

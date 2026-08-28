@@ -23,7 +23,7 @@ Both systems can coexist within the same deployed pool instance, and users may p
 | **Partial Withdrawal** | Supported (amount <= locked amount) | Full unstake of current balance |
 | **Boost Multipliers** | Fixed standard accrual | Configurable boost via `set_boost(allocation_pct)` |
 | **Credit Rate Snapshot** | Checkpointed in `checkpoint_ledger` | Checkpointed in `start_ledger` |
-| **Credit Calculation** | `calculate_credits(user)` | `get_credits(user)` |
+| **Credit Calculation** | `calculate_credits(user)` / `get_position_credits(user)` | `get_stake_credits(user)` (`get_credits(user)` for combined total) |
 | **Emitted Events** | `(pool, locked)`, `(pool, unlocked)` | None (governed via token/boost events) |
 
 ---

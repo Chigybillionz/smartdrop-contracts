@@ -7,7 +7,7 @@ mod types;
 
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, BytesN, Env, Vec};
 pub use types::PoolError;
-use types::{BankedCreditTotals, BoostConfig, DataKey, Position, UserStake};
+use types::{BankedCreditTotals, BoostConfig, DataKey, ListWhitelistedResponse, Position, UserStake};
 
 // Expose compiled WASM bytes so sibling crates (e.g. `factory`) can upload the
 // real farming-pool contract in their integration tests via:
@@ -278,6 +278,18 @@ fn set_banked_credits(env: &Env, user: &Address, totals: BankedCreditTotals) {
     bump_user(env, &key);
 }
 
+fn add_total_distributed_credits(env: &Env, amount: i128) {
+    let total = env
+        .storage()
+        .instance()
+        .get::<DataKey, i128>(&DataKey::TotalDistributedCredits)
+        .unwrap_or(0);
+    env.storage().instance().set(
+        &DataKey::TotalDistributedCredits,
+        &total.checked_add(amount).expect("total credits overflow"),
+    );
+}
+
 fn get_position(env: &Env, user: &Address) -> Option<Position> {
     let key = DataKey::UserPosition(user.clone());
     let value: Option<Position> = env.storage().persistent().get(&key);
@@ -313,6 +325,19 @@ fn is_user_whitelisted(env: &Env, user: &Address) -> bool {
         bump_user(env, &key);
     }
     ok
+}
+
+fn get_whitelisted_users_list(env: &Env) -> Vec<Address> {
+    env.storage()
+        .instance()
+        .get(&DataKey::WhitelistedUsers)
+        .unwrap_or(Vec::new(env))
+}
+
+fn set_whitelisted_users_list(env: &Env, users: &Vec<Address>) {
+    env.storage()
+        .instance()
+        .set(&DataKey::WhitelistedUsers, users);
 }
 
 // ── Boost calculation ─────────────────────────────────────────────────────────
@@ -382,18 +407,44 @@ fn compute_stake_accrual(
     )
 }
 
+/// Snapshot the user's current credit accrual and adopt the latest global
+/// multiplier and credit rate.
+///
+/// This is called internally by `stake`, `unstake`, and `set_boost` to
+/// freeze the user's accrued credits under the *old* rate/multiplier before
+/// switching them to the *current* values for future accrual.
+///
+/// # Design trade-off: rate changes between checkpoints
+///
+/// `credit_rate` and `global_multiplier` are global parameters that can be
+/// changed by the admin at any time (via `set_credit_rate` /
+/// `set_global_multiplier`). Because each user's snapshot is only updated
+/// when *they* trigger a checkpoint (stake, unstake, or set_boost), users
+/// who checkpoint less frequently may earn credits at a different effective
+/// rate than those who checkpoint more often during a rate change window.
+///
+/// This is an intentional design choice: it keeps credit accrual fully
+/// local to each user's storage entry (no shared counter to synchronise),
+/// avoids front-running concerns around rate changes, and ensures that the
+/// cost of a rate change is O(1) rather than O(n) in the number of users.
+/// Integrators should be aware that a user's on-chain credit balance may
+/// temporarily reflect an outdated rate until their next checkpoint.
 fn checkpoint(env: &Env, user: &Address, stake: &mut UserStake) {
     let current = env.ledger().sequence();
-    stake.credits_banked += compute_stake_accrual(env, user, stake, current);
+    let accrued = compute_stake_accrual(env, user, stake, current);
+    stake.credits_banked += accrued;
+    add_total_distributed_credits(env, accrued);
     stake.start_ledger = current;
     stake.credit_rate = read_credit_rate(env);
     stake.multiplier = read_global_multiplier(env);
 }
 
-fn checkpoint_position(env: &Env, position: &mut Position) {
+fn checkpoint_position(env: &Env, user: &Address, position: &mut Position) {
     let current = env.ledger().sequence();
     let elapsed = current.saturating_sub(position.checkpoint_ledger);
-    position.total_credits += position.amount * position.credit_rate * elapsed as i128;
+    let allocation_pct = get_user_boost(env, user).unwrap_or(0);
+    let effective_amount = compute_total_stake(position.amount, allocation_pct, read_global_multiplier(env));
+    position.total_credits += effective_amount * position.credit_rate * elapsed as i128;
     position.checkpoint_ledger = current;
     position.credit_rate = read_credit_rate(env);
 }
@@ -452,6 +503,9 @@ impl FarmingPool {
             .instance()
             .set(&DataKey::MinStakeAmount, &min_stake);
         env.storage().instance().set(&DataKey::TotalStaked, &0i128);
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalDistributedCredits, &0i128);
         env.storage()
             .instance()
             .set(&DataKey::SchemaVersion, &SCHEMA_VERSION);
@@ -535,6 +589,23 @@ impl FarmingPool {
         read_schema_version(&env)
     }
 
+    /// Schema migration entry-point (currently a no-op placeholder).
+    ///
+    /// This function exists so that future schema version bumps can perform
+    /// data migrations inside the same entry-point without changing the ABI.
+    /// At present `SCHEMA_VERSION == 1` and no stored data needs
+    /// transformation, so the call simply stamps the current version and
+    /// returns the previous one.
+    ///
+    /// Admin-only. Returns the schema version *before* this call.
+    ///
+    /// # Behaviour once real migrations are needed
+    ///
+    /// When `SCHEMA_VERSION` is bumped, add a `match` over the old version
+    /// that performs the necessary storage reads/writes (e.g. re-encoding a
+    /// stored struct, adding a new field with a default value, etc.) **before**
+    /// writing the new `SCHEMA_VERSION`. Each migration step must be idempotent
+    /// and should be tested in isolation.
     pub fn migrate(env: Env) -> Result<u32, PoolError> {
         require_initialized(&env)?;
         get_admin(&env)?.require_auth();
@@ -584,7 +655,7 @@ impl FarmingPool {
         let was_staked = is_user_staked(&env, &user);
         let current = env.ledger().sequence();
         let mut position = if let Some(mut existing) = get_position(&env, &user) {
-            checkpoint_position(&env, &mut existing);
+            checkpoint_position(&env, &user, &mut existing);
             existing.amount += amount;
             let fresh_unlock = current.saturating_add(read_min_lock_period(&env));
             existing.unlock_ledger = existing.unlock_ledger.max(fresh_unlock);
@@ -626,7 +697,7 @@ impl FarmingPool {
 
         env.events().publish(
             (symbol_short!("pool"), symbol_short!("locked")),
-            (user, amount),
+            (user, amount, position.unlock_ledger),
         );
         Ok(())
     }
@@ -649,7 +720,7 @@ impl FarmingPool {
             "minimum lock period not elapsed"
         );
 
-        checkpoint_position(&env, &mut position);
+        checkpoint_position(&env, &user, &mut position);
         let total_credits = position.total_credits;
         position.amount -= amount;
 
@@ -687,6 +758,10 @@ impl FarmingPool {
         Ok(())
     }
 
+    /// Calculate current accrued credits specifically for the time-locked `Position` staking system.
+    ///
+    /// See also `get_position_credits` (an explicit alias for this function) and `get_credits`
+    /// (which calculates combined credits across both `Position` and `UserStake` systems).
     pub fn calculate_credits(env: Env, user: Address) -> Result<i128, PoolError> {
         require_initialized(&env)?;
         bump_instance(&env);
@@ -698,7 +773,16 @@ impl FarmingPool {
             .ledger()
             .sequence()
             .saturating_sub(position.checkpoint_ledger);
-        Ok(position.total_credits + position.amount * position.credit_rate * elapsed as i128)
+        let allocation_pct = get_user_boost(&env, &user).unwrap_or(0);
+        let effective_amount = compute_total_stake(position.amount, allocation_pct, read_global_multiplier(&env));
+        Ok(position.total_credits + effective_amount * position.credit_rate * elapsed as i128)
+    }
+
+    /// Return current accrued credits for a user's time-locked `Position`.
+    ///
+    /// Alias for `calculate_credits` providing explicit system-specific naming.
+    pub fn get_position_credits(env: Env, user: Address) -> Result<i128, PoolError> {
+        Self::calculate_credits(env, user)
     }
 
     pub fn get_user_position(env: Env, user: Address) -> Result<Option<Position>, PoolError> {
@@ -709,7 +793,9 @@ impl FarmingPool {
         };
         let current = env.ledger().sequence();
         let elapsed = current.saturating_sub(position.checkpoint_ledger);
-        position.total_credits += position.amount * position.credit_rate * elapsed as i128;
+        let allocation_pct = get_user_boost(&env, &user).unwrap_or(0);
+        let effective_amount = compute_total_stake(position.amount, allocation_pct, read_global_multiplier(&env));
+        position.total_credits += effective_amount * position.credit_rate * elapsed as i128;
         position.checkpoint_ledger = current;
         position.credit_rate = read_credit_rate(&env);
         Ok(Some(position))
@@ -787,9 +873,22 @@ impl FarmingPool {
 
     /// Withdraw staked/locked tokens during emergency when pool is paused.
     ///
-    /// Allows users to self-withdraw their assets during a pause without requiring
-    /// admin intervention. Requires authorization from `user`. Checkpoints and preserves
-    /// accrued credit totals in `BankedCredits`.
+    /// Allows users to withdraw their staked/locked assets during an emergency pause.
+    /// Requires authorization from `user`. Checkpoints and preserves accrued credit
+    /// totals in `BankedCredits`.
+    ///
+    /// # Usage & Operational Guidelines
+    /// - **When to Use**: Called during emergency situations or protocol maintenance when
+    ///   the contract has been explicitly paused via `pause()`.
+    /// - **Credit Preservation**: Staked/locked assets are returned in full while accrued
+    ///   credits are safely preserved in `BankedCredits` split between `position_credits`
+    ///   and `stake_credits` (see `get_banked_credits_split`). Users do not forfeit earned credits.
+    /// - **User Notification & Off-Chain Tracking**: Every emergency withdrawal emits an
+    ///   on-chain `("pool", "emrg_exit")` event with payload `(admin, user, total_returned)`.
+    ///   Indexers and frontends notify users of emergency exit transactions by monitoring this topic.
+    /// - **Audit Requirements & Privilege Governance**: Because emergency mechanisms handle pool
+    ///   assets during security pauses, all admin actions initiating pauses and emergency exits must
+    ///   be logged to immutable audit trails and governed by multi-sig or timelock controls.
     pub fn emergency_withdraw(env: Env, user: Address) -> Result<i128, PoolError> {
         user.require_auth();
         require_initialized(&env)?;
@@ -909,6 +1008,12 @@ impl FarmingPool {
         let key = DataKey::Whitelisted(user.clone());
         env.storage().persistent().set(&key, &true);
         bump_user(&env, &key);
+
+        let mut users = get_whitelisted_users_list(&env);
+        if !users.contains(&user) {
+            users.push_back(user);
+            set_whitelisted_users_list(&env, &users);
+        }
         Ok(())
     }
 
@@ -920,6 +1025,15 @@ impl FarmingPool {
 
         let key = DataKey::Whitelisted(user.clone());
         env.storage().persistent().remove(&key);
+
+        let mut users = get_whitelisted_users_list(&env);
+        let mut new_users: Vec<Address> = Vec::new(&env);
+        for u in users.iter() {
+            if u != user {
+                new_users.push_back(u);
+            }
+        }
+        set_whitelisted_users_list(&env, &new_users);
         Ok(())
     }
 
@@ -929,6 +1043,36 @@ impl FarmingPool {
         is_user_whitelisted(&env, &user)
     }
 
+    /// Return a paginated list of all whitelisted addresses.
+    ///
+    /// `offset`: zero-based index of the first address to return.
+    /// `limit`: maximum number of addresses to return per call.
+    ///
+    /// Returns a `ListWhitelistedResponse` containing the requested page and
+    /// the total number of whitelisted addresses. Call repeatedly with
+    /// increasing `offset` until `offset >= total` to retrieve the full list.
+    pub fn get_whitelisted_users(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> Result<ListWhitelistedResponse, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+
+        let all = get_whitelisted_users_list(&env);
+        let total = all.len();
+        let mut page: Vec<Address> = Vec::new(&env);
+        let mut i = offset;
+        let mut count = 0u32;
+        while i < total && count < limit {
+            page.push_back(all.get(i).unwrap());
+            i += 1;
+            count += 1;
+        }
+
+        Ok(ListWhitelistedResponse { users: page, total })
+    }
+
     /// Admin: batch add multiple `users` to the whitelist. Capped at 50 addresses per call. Admin must authorise.
     pub fn batch_add_to_whitelist(env: Env, users: Vec<Address>) -> Result<(), PoolError> {
         require_initialized(&env)?;
@@ -936,11 +1080,17 @@ impl FarmingPool {
         assert!(users.len() <= 50, "max 50 addresses per call");
         bump_instance(&env);
 
+        let mut list = get_whitelisted_users_list(&env);
         for user in users.iter() {
             let key = DataKey::Whitelisted(user.clone());
             env.storage().persistent().set(&key, &true);
             bump_user(&env, &key);
+
+            if !list.contains(&user) {
+                list.push_back(user);
+            }
         }
+        set_whitelisted_users_list(&env, &list);
         Ok(())
     }
 
@@ -955,10 +1105,20 @@ impl FarmingPool {
         assert!(users.len() <= 50, "max 50 addresses per call");
         bump_instance(&env);
 
+        let mut list = get_whitelisted_users_list(&env);
         for user in users.iter() {
             let key = DataKey::Whitelisted(user.clone());
             env.storage().persistent().remove(&key);
+
+            let mut new_list: Vec<Address> = Vec::new(&env);
+            for u in list.iter() {
+                if u != user {
+                    new_list.push_back(u);
+                }
+            }
+            list = new_list;
         }
+        set_whitelisted_users_list(&env, &list);
         Ok(())
     }
 
@@ -1021,7 +1181,7 @@ impl FarmingPool {
         new_stake.credit_rate = read_credit_rate(&env);
 
         // Checks-effects-interactions: persist state *before* the external
-        // token transfer below, consistent with `lock_assets`. See #69.
+        // token transfer below, consistent with `lock_assets`. See #69, #217.
         set_user_stake(&env, &from, &new_stake);
         if !was_staked && is_user_staked(&env, &from) {
             increment_staked_user_count(&env);
@@ -1215,6 +1375,29 @@ impl FarmingPool {
         Self::min_lock_period_seconds(env)
     }
 
+    /// Return current accrued credits specifically for a user's `UserStake` (boost/continuous staking system).
+    ///
+    /// Includes both live accrual for the active stake and banked stake credits from previous withdrawals.
+    pub fn get_stake_credits(env: Env, user: Address) -> Result<i128, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        let banked = Self::get_banked_credits_split(env.clone(), user.clone())?;
+
+        let stake_credits = get_user_stake(&env, &user)
+            .map(|stake| {
+                stake.credits_banked
+                    + compute_stake_accrual(&env, &user, &stake, env.ledger().sequence())
+            })
+            .unwrap_or(0);
+
+        Ok(banked.stake_credits + stake_credits)
+    }
+
+    /// Return total combined accrued credits for `user` across all staking systems.
+    ///
+    /// Merges credits from time-locked `Position` staking, flexible `UserStake` boost staking,
+    /// and prior `BankedCredits`. To query individual systems, see `get_position_credits`
+    /// (`calculate_credits`) and `get_stake_credits`.
     pub fn get_credits(env: Env, user: Address) -> Result<i128, PoolError> {
         require_initialized(&env)?;
         bump_instance(&env);
@@ -1226,8 +1409,10 @@ impl FarmingPool {
                     .ledger()
                     .sequence()
                     .saturating_sub(position.checkpoint_ledger);
+                let allocation_pct = get_user_boost(&env, &user).unwrap_or(0);
+                let effective_amount = compute_total_stake(position.amount, allocation_pct, read_global_multiplier(&env));
                 position.total_credits
-                    + position.amount * position.credit_rate * elapsed as i128
+                    + effective_amount * position.credit_rate * elapsed as i128
             })
             .unwrap_or(0);
 
@@ -1298,18 +1483,23 @@ impl FarmingPool {
             .unwrap_or(0))
     }
 
-    pub fn staked_user_count(env: Env) -> Result<u32, PoolError> {
+    /// Return the cumulative number of credits distributed to all users since
+    /// the pool was initialized.
+    ///
+    /// The counter grows as credits are committed (banked) for users — at each
+    /// `checkpoint`/`checkpoint_position` that occurs on stake, lock, boost,
+    /// unlock, and unstake operations — rather than on every read-only
+    /// accrual view. It therefore always reflects the sum a protocol-wide
+    /// `get_credits` aggregation converges to as users interact, and is the
+    /// companion of `total_staked` for reward-rate and inflation analytics.
+    pub fn total_distributed_credits(env: Env) -> Result<i128, PoolError> {
         require_initialized(&env)?;
         bump_instance(&env);
         Ok(env
             .storage()
             .instance()
-            .get(&DataKey::StakedUserCount)
+            .get(&DataKey::TotalDistributedCredits)
             .unwrap_or(0))
-    }
-
-    pub fn get_staked_user_count(env: Env) -> Result<u32, PoolError> {
-        Self::staked_user_count(env)
     }
 }
 

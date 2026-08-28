@@ -207,6 +207,13 @@ impl Factory {
     ///
     /// Returns `NotInitialized` if the factory has not been initialized, or
     /// `PoolNotFound` if `pool_id` has not been created yet.
+    ///
+    /// # TTL keep-alive
+    /// On success, extends the persistent TTL of the requested pool record (and
+    /// the factory instance) when remaining TTL falls below `TTL_THRESHOLD`.
+    /// Pools that are never individually queried should be kept alive via
+    /// paginated `list_pools` reads, asset-range queries, or the permissionless
+    /// `refresh_pool_ttls` function.
     pub fn get_pool(env: Env, pool_id: u32) -> Result<PoolRecord, FactoryError> {
         require_initialized(&env)?;
         bump_instance(&env);
@@ -227,6 +234,15 @@ impl Factory {
     ///
     /// Guarded like `pool_count`: an empty page from an uninitialized factory
     /// would be indistinguishable from an initialized but empty registry.
+    ///
+    /// # TTL keep-alive
+    /// Extends the persistent TTL of every pool record returned in this page
+    /// (plus the factory instance). Unlike `get_pool`, which bumps one record
+    /// per call, each paginated read refreshes all pools in the window. Indexers
+    /// that page through the registry therefore keep listed pools alive more
+    /// aggressively than pools accessed only via `get_pool(id)`. For deliberate
+    /// full-registry maintenance independent of read patterns, use
+    /// `refresh_pool_ttls`.
     ///
     /// Returns `NotInitialized` if the factory has not been initialized.
     pub fn list_pools(
@@ -253,10 +269,12 @@ impl Factory {
             }
         }
 
+        let has_more = end < count;
         Ok(ListPoolsResponse {
             records,
             next_start_id: if end < count { end } else { count },
             total: count,
+            has_more,
         })
     }
 
@@ -293,10 +311,12 @@ impl Factory {
             }
         }
 
+        let has_more = end < count;
         Ok(ListPoolsResponse {
             records,
             next_start_id: if end < count { end } else { count },
             total: count,
+            has_more,
         })
     }
 
@@ -361,10 +381,12 @@ impl Factory {
             }
         }
 
+        let has_more = next_start_id < count;
         Ok(ListPoolsResponse {
             records,
             next_start_id,
             total: count,
+            has_more,
         })
     }
 
@@ -450,6 +472,10 @@ impl Factory {
                 bump_pool(&env, pool_id);
             }
         }
+        env.events().publish(
+            (symbol_short!("factory"), symbol_short!("ttl_ref")),
+            (start_id, end),
+        );
         Ok(())
     }
 
@@ -580,6 +606,58 @@ impl Factory {
         Ok(())
     }
 
+    /// Pause pool creation. Admin-only.
+    ///
+    /// Prevents future `create_pool` calls during maintenance or security emergencies.
+    /// Emits a `pause_cr` event.
+    pub fn pause_pool_creation(env: Env) -> Result<(), FactoryError> {
+        require_initialized(&env)?;
+        let admin = load_admin(&env)?;
+        admin.require_auth();
+        bump_instance(&env);
+
+        env.storage()
+            .instance()
+            .set(&DataKey::PoolCreationPaused, &true);
+        #[allow(deprecated)]
+        env.events().publish(
+            (symbol_short!("factory"), symbol_short!("pause_cr")),
+            admin,
+        );
+        Ok(())
+    }
+
+    /// Resume pool creation. Admin-only.
+    ///
+    /// Allows `create_pool` calls after a pause. Emits an `unps_cr` event.
+    pub fn unpause_pool_creation(env: Env) -> Result<(), FactoryError> {
+        require_initialized(&env)?;
+        let admin = load_admin(&env)?;
+        admin.require_auth();
+        bump_instance(&env);
+
+        env.storage()
+            .instance()
+            .set(&DataKey::PoolCreationPaused, &false);
+        #[allow(deprecated)]
+        env.events().publish(
+            (symbol_short!("factory"), symbol_short!("unps_cr")),
+            admin,
+        );
+        Ok(())
+    }
+
+    /// Return whether pool creation is currently paused.
+    pub fn is_pool_creation_paused(env: Env) -> Result<bool, FactoryError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(env
+            .storage()
+            .instance()
+            .get(&DataKey::PoolCreationPaused)
+            .unwrap_or(false))
+    }
+
     /// Create, deploy, and initialize a new farming pool. Admin-only.
     ///
     /// Unlike the pre-#80 version of this function, the deployed pool is no
@@ -604,6 +682,12 @@ impl Factory {
     /// `global_multiplier`, and `min_lock_period` alongside `pool_id` and
     /// `pool_address` so off-chain indexers can reconstruct the full pool
     /// state without a follow-up RPC call.
+    ///
+    /// On failure, no event is emitted: a validation failure reverts this
+    /// invocation, and Soroban discards contract events published by reverted
+    /// calls. Callers must handle the returned `FactoryError` directly (and,
+    /// off-chain, can monitor for failed creation attempts via failed
+    /// transaction diagnostics rather than contract events).
     pub fn create_pool(
         env: Env,
         asset: Address,
@@ -616,6 +700,16 @@ impl Factory {
         let admin = load_admin(&env)?;
         admin.require_auth();
         bump_instance(&env);
+
+        let paused: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::PoolCreationPaused)
+            .unwrap_or(false);
+        if paused {
+            return Err(FactoryError::PoolCreationPaused);
+        }
+
         validate_asset(&env, &asset)?;
 
         if global_multiplier < 1 {

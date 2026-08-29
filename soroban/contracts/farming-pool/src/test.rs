@@ -2792,4 +2792,47 @@ fn test_unstake_count_increments_on_every_unstake_operation() {
     assert_eq!(t.client.unstake_count(), 2);
 }
 
+#[test]
+fn test_boost_count_increments_on_new_boost_config() {
+    let t = setup(1, 10);
+    assert_eq!(t.client.boost_count(), 0);
+    assert_eq!(t.client.get_boost_count(), 0);
+
+    let user2 = Address::generate(&t.env);
+    t.token_sac.mint(&user2, &10_000);
+
+    t.client.set_boost(&t.user, &50u32);
+    assert_eq!(t.client.boost_count(), 1);
+    assert_eq!(t.client.get_boost_count(), 1);
+
+    // Updating existing boost does not increment boost_count
+    t.client.set_boost(&t.user, &75u32);
+    assert_eq!(t.client.boost_count(), 1);
+
+    // Setting boost for user2 increments boost_count to 2
+    t.client.set_boost(&user2, &25u32);
+    assert_eq!(t.client.boost_count(), 2);
+}
+
+#[test]
+fn test_total_locked_tracks_locked_positions() {
+    let t = setup(1, 10);
+    assert_eq!(t.client.total_locked(), 0);
+    assert_eq!(t.client.get_total_locked(), 0);
+
+    let user2 = Address::generate(&t.env);
+    t.token_sac.mint(&user2, &10_000);
+
+    t.client.lock_assets(&t.user, &1_000);
+    assert_eq!(t.client.total_locked(), 1_000);
+    assert_eq!(t.client.get_total_locked(), 1_000);
+
+    t.client.lock_assets(&user2, &2_000);
+    assert_eq!(t.client.total_locked(), 3_000);
+
+    advance_ledgers(&t.env, 10);
+    t.client.unlock_assets(&t.user, &1_000);
+    assert_eq!(t.client.total_locked(), 2_000);
+}
+
 

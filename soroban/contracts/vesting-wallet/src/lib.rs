@@ -258,7 +258,7 @@ impl VestingWallet {
         #[allow(deprecated)]
         env.events().publish(
             (symbol_short!("vest"), symbol_short!("released")),
-            (beneficiary, releasable),
+            (beneficiary, releasable, released + releasable),
         );
 
         Ok(releasable)

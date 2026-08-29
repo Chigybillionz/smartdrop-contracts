@@ -115,6 +115,10 @@ pub enum DataKey {
     LockCount,
     /// Running count of total unstake operations performed.
     UnstakeCount,
+    /// Running count of user boost configurations set.
+    BoostCount,
+    /// Total tokens currently locked in positions.
+    TotalLocked,
 }
 
 /// Paginated response for `get_whitelisted_users`.

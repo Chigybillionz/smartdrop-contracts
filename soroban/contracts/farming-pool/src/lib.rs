@@ -253,6 +253,39 @@ fn subtract_total_staked(env: &Env, amount: i128) {
     );
 }
 
+fn add_total_locked(env: &Env, amount: i128) {
+    let total = env
+        .storage()
+        .instance()
+        .get::<DataKey, i128>(&DataKey::TotalLocked)
+        .unwrap_or(0);
+    env.storage().instance().set(
+        &DataKey::TotalLocked,
+        &total.checked_add(amount).expect("total locked overflow"),
+    );
+}
+
+fn subtract_total_locked(env: &Env, amount: i128) {
+    let total = env
+        .storage()
+        .instance()
+        .get::<DataKey, i128>(&DataKey::TotalLocked)
+        .unwrap_or(0);
+    env.storage().instance().set(
+        &DataKey::TotalLocked,
+        &total.checked_sub(amount).expect("total locked underflow"),
+    );
+}
+
+fn read_boost_count(env: &Env) -> u32 {
+    env.storage().instance().get(&DataKey::BoostCount).unwrap_or(0)
+}
+
+fn increment_boost_count(env: &Env) {
+    let count = read_boost_count(env);
+    env.storage().instance().set(&DataKey::BoostCount, &(count + 1));
+}
+
 fn is_user_staked(env: &Env, user: &Address) -> bool {
     get_position(env, user).is_some() || get_user_stake(env, user).is_some()
 }
@@ -551,6 +584,7 @@ impl FarmingPool {
             .instance()
             .set(&DataKey::MinStakeAmount, &min_stake);
         env.storage().instance().set(&DataKey::TotalStaked, &0i128);
+        env.storage().instance().set(&DataKey::TotalLocked, &0i128);
         env.storage()
             .instance()
             .set(&DataKey::TotalCredits, &0i128);
@@ -738,6 +772,7 @@ impl FarmingPool {
         }
         increment_lock_count(&env);
         add_total_staked(&env, amount);
+        add_total_locked(&env, amount);
 
         let stake_token = get_stake_token(&env)?;
         token::TokenClient::new(&env, &stake_token).transfer(
@@ -794,6 +829,7 @@ impl FarmingPool {
             decrement_staked_user_count(&env);
         }
         subtract_total_staked(&env, amount);
+        subtract_total_locked(&env, amount);
 
         let stake_token = get_stake_token(&env)?;
         token::TokenClient::new(&env, &stake_token).transfer(
@@ -991,6 +1027,7 @@ impl FarmingPool {
             token.transfer(&env.current_contract_address(), &user, &position.amount);
             total_returned += position.amount;
             subtract_total_staked(&env, position.amount);
+            subtract_total_locked(&env, position.amount);
             position_credits = position.total_credits;
             remove_position(&env, &user);
         }
@@ -1357,6 +1394,9 @@ impl FarmingPool {
         }
 
         let key = DataKey::UserBoost(user.clone());
+        if !env.storage().persistent().has(&key) {
+            increment_boost_count(&env);
+        }
         env.storage().persistent().set(&key, &allocation_pct);
         bump_user(&env, &key);
 
@@ -1663,6 +1703,32 @@ impl FarmingPool {
 
     pub fn get_unstake_count(env: Env) -> Result<u32, PoolError> {
         Self::unstake_count(env)
+    }
+
+    /// Return the total number of boost configurations configured across users (#230).
+    pub fn boost_count(env: Env) -> Result<u32, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(read_boost_count(&env))
+    }
+
+    pub fn get_boost_count(env: Env) -> Result<u32, PoolError> {
+        Self::boost_count(env)
+    }
+
+    /// Return the total tokens locked across all position locking positions (#232).
+    pub fn total_locked(env: Env) -> Result<i128, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(env
+            .storage()
+            .instance()
+            .get(&DataKey::TotalLocked)
+            .unwrap_or(0))
+    }
+
+    pub fn get_total_locked(env: Env) -> Result<i128, PoolError> {
+        Self::total_locked(env)
     }
 }
 

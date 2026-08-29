@@ -3,8 +3,7 @@
 mod types;
 
 use soroban_sdk::{
-    contract, contractimpl, symbol_short, vec, Address, BytesN, Env, IntoVal, String, Symbol, Val,
-    Vec,
+    contract, contractimpl, symbol_short, vec, Address, BytesN, Env, IntoVal, Symbol, Val, Vec,
 };
 use types::{DataKey, FactoryError, ListPoolsResponse, PoolRecord, PoolSort};
 
@@ -22,7 +21,7 @@ const LEDGERS_PER_DAY: u128 = 17_280;
 // standard 7-decimal Stellar asset convention and prevents dust positions.
 const MIN_STAKE_AMOUNT: i128 = 1_000_000;
 // Minimum lock period in ledgers required to prevent flash-loan-style attacks.
-const MIN_LOCK_PERIOD: u32 = 0;
+const MIN_LOCK_PERIOD: u32 = 1;
 
 /// Convert a "credits per day" figure into the deployed pool's native
 /// "credits per ledger" `credit_rate`.
@@ -47,7 +46,7 @@ fn daily_rate_to_credit_rate(daily_rate: u128) -> Result<i128, FactoryError> {
     if daily_rate == 0 {
         return Err(FactoryError::InvalidCreditRate);
     }
-    let per_ledger = (daily_rate + LEDGERS_PER_DAY - 1) / LEDGERS_PER_DAY;
+    let per_ledger = daily_rate.div_ceil(LEDGERS_PER_DAY);
     i128::try_from(per_ledger).map_err(|_| FactoryError::InvalidCreditRate)
 }
 
@@ -74,6 +73,14 @@ fn bump_asset_pools(env: &Env, asset: &Address) {
 fn bump_admin_pools(env: &Env, admin: &Address) {
     env.storage().persistent().extend_ttl(
         &DataKey::PoolsByAdmin(admin.clone()),
+        TTL_THRESHOLD,
+        TTL_EXTEND_TO,
+    );
+}
+
+fn bump_wasm_pools(env: &Env, wasm_hash: &BytesN<32>) {
+    env.storage().persistent().extend_ttl(
+        &DataKey::PoolsByWasmHash(wasm_hash.clone()),
         TTL_THRESHOLD,
         TTL_EXTEND_TO,
     );
@@ -191,7 +198,12 @@ impl Factory {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(FactoryError::AlreadyInitialized);
         }
-        if admin == Address::from_string(&soroban_sdk::String::from_str(&env, "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")) {
+        if admin
+            == Address::from_string(&soroban_sdk::String::from_str(
+                &env,
+                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+            ))
+        {
             return Err(FactoryError::InvalidAdmin);
         }
         if pool_wasm_hash == BytesN::from_array(&env, &[0u8; 32]) {
@@ -409,7 +421,11 @@ impl Factory {
         let mut next_start_id = scan_end;
 
         let asset_key = DataKey::AssetPools(asset.clone());
-        if let Some(asset_ids) = env.storage().persistent().get::<DataKey, Vec<u32>>(&asset_key) {
+        if let Some(asset_ids) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, Vec<u32>>(&asset_key)
+        {
             bump_asset_pools(&env, &asset);
             for pool_id in asset_ids.iter() {
                 if pool_id < start_id {
@@ -491,6 +507,14 @@ impl Factory {
             .unwrap_or_else(|| vec![&env]))
     }
 
+    /// Return the number of pools created by `admin` (#236).
+    ///
+    /// Equivalent to `get_pools_by_admin(admin).len()`, exposed directly so
+    /// callers who only need the count avoid paying for the full ID list.
+    pub fn get_admin_pool_count(env: Env, admin: Address) -> Result<u32, FactoryError> {
+        Ok(Self::get_pools_by_admin(env, admin)?.len())
+    }
+
     /// Refresh TTLs for a range of pool records to prevent archival.
     ///
     /// This permissionless function allows keepers or any caller to proactively
@@ -557,6 +581,7 @@ impl Factory {
                 bump_pool(&env, pool_id);
             }
         }
+        #[allow(deprecated)]
         env.events().publish(
             (symbol_short!("factory"), symbol_short!("ttl_ref")),
             (start_id, end),
@@ -667,7 +692,7 @@ impl Factory {
         env.storage().persistent().set(&key, &record);
 
         let old_wasm_key = DataKey::PoolsByWasmHash(old_hash.clone());
-        if let Some(mut old_pool_ids) = env
+        if let Some(old_pool_ids) = env
             .storage()
             .persistent()
             .get::<DataKey, Vec<u32>>(&old_wasm_key)
@@ -691,9 +716,10 @@ impl Factory {
         env.storage().persistent().set(&new_wasm_key, &new_pool_ids);
         bump_wasm_pools(&env, &new_wasm_hash);
 
-        env.storage()
-            .instance()
-            .set(&DataKey::UpgradeCount, &read_upgrade_count(&env).saturating_add(1));
+        env.storage().instance().set(
+            &DataKey::UpgradeCount,
+            &read_upgrade_count(&env).saturating_add(1),
+        );
 
         #[allow(deprecated)]
         env.events().publish(
@@ -810,10 +836,10 @@ impl Factory {
     /// smallest-diff option that avoids the larger "factory proxies every
     /// admin action" design surface.
     ///
-    /// The `pool_crtd` event includes `asset`, `credit_rate`,
+    /// The `pool_crtd` event includes `admin`, `asset`, `credit_rate`,
     /// `global_multiplier`, and `min_lock_period` alongside `pool_id` and
     /// `pool_address` so off-chain indexers can reconstruct the full pool
-    /// state without a follow-up RPC call.
+    /// state — including who created it — without a follow-up RPC call (#233).
     ///
     /// On failure, no event is emitted: a validation failure reverts this
     /// invocation, and Soroban discards contract events published by reverted
@@ -937,6 +963,7 @@ impl Factory {
             (
                 pool_id,
                 pool_address,
+                admin,
                 asset,
                 credit_rate,
                 global_multiplier,

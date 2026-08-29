@@ -224,7 +224,10 @@ fn end_to_end_create_pool_then_stake_and_unstake() {
     // daily_rate -> credit_rate conversion (divides by LEDGERS_PER_DAY) and
     // yields credit_rate == 1, matching this test's assumed rate below.
     let daily_rate = 17_280u128;
-    let min_lock_period: u32 = 0;
+    // This test exercises the flexible `stake`/`unstake` boost system, not the
+    // locked `Position` system, so the lock period is irrelevant here beyond
+    // satisfying `create_pool`'s `MinLockPeriodTooShort` floor.
+    let min_lock_period: u32 = 1;
 
     let (pool_client, pool_address) = deploy_pool_via_factory(
         &env,

@@ -117,6 +117,20 @@ pub enum DataKey {
     UnstakeCount,
     TotalCredits,
     EmergencyWithdrawalCount,
+    /// Running count of `set_boost` calls performed (#230).
+    BoostCount,
+    /// Total tokens currently locked in time-locked `Position`s (#232).
+    TotalLocked,
+    /// Running total of all tokens deposited into the pool via `stake` and `lock_assets`.
+    TotalDeposits,
+    /// Running total of all tokens withdrawn from the pool via `unstake`,
+    /// `unlock_assets`, and `emergency_withdraw`.
+    TotalWithdrawals,
+    /// Sum of every user's current boost `allocation_pct`, tracked incrementally
+    /// as `set_boost` calls change each user's allocation.
+    TotalBoostAlloc,
+    /// Count of users with a non-zero boost allocation currently set.
+    BoostUserCount,
 }
 
 /// Paginated response for `get_whitelisted_users`.

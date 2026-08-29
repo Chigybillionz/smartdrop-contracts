@@ -666,6 +666,31 @@ impl Factory {
         record.wasm_hash = new_wasm_hash.clone();
         env.storage().persistent().set(&key, &record);
 
+        let old_wasm_key = DataKey::PoolsByWasmHash(old_hash.clone());
+        if let Some(mut old_pool_ids) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, Vec<u32>>(&old_wasm_key)
+        {
+            let mut new_old_ids: Vec<u32> = vec![&env];
+            for id in old_pool_ids.iter() {
+                if id != pool_id {
+                    new_old_ids.push_back(id);
+                }
+            }
+            env.storage().persistent().set(&old_wasm_key, &new_old_ids);
+        }
+
+        let new_wasm_key = DataKey::PoolsByWasmHash(new_wasm_hash.clone());
+        let mut new_pool_ids: Vec<u32> = env
+            .storage()
+            .persistent()
+            .get(&new_wasm_key)
+            .unwrap_or_else(|| vec![&env]);
+        new_pool_ids.push_back(pool_id);
+        env.storage().persistent().set(&new_wasm_key, &new_pool_ids);
+        bump_wasm_pools(&env, &new_wasm_hash);
+
         env.storage()
             .instance()
             .set(&DataKey::UpgradeCount, &read_upgrade_count(&env).saturating_add(1));

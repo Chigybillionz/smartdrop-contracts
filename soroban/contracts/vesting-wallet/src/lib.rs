@@ -337,6 +337,13 @@ impl VestingWallet {
         Ok(compute_vested(&env)? - get_released(&env))
     }
 
+    /// Return whether the vesting schedule is revocable by admin.
+    pub fn revocable(env: Env) -> Result<bool, VestingError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(is_revocable(&env))
+    }
+
     /// Return the full vesting schedule parameters in a single call.
     ///
     /// Frontends need `beneficiary`, `token`, `total_amount`, `start_ledger`,

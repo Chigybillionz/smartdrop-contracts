@@ -373,6 +373,102 @@ fn add_total_distributed_credits(env: &Env, amount: i128) {
     );
 }
 
+fn add_total_credits(env: &Env, amount: i128) {
+    let total = env
+        .storage()
+        .instance()
+        .get::<DataKey, i128>(&DataKey::TotalCredits)
+        .unwrap_or(0);
+    env.storage().instance().set(
+        &DataKey::TotalCredits,
+        &total.checked_add(amount).expect("total credits overflow"),
+    );
+}
+
+fn read_total_deposits(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::TotalDeposits)
+        .unwrap_or(0)
+}
+
+fn add_total_deposits(env: &Env, amount: i128) {
+    let total = env
+        .storage()
+        .instance()
+        .get::<DataKey, i128>(&DataKey::TotalDeposits)
+        .unwrap_or(0);
+    env.storage().instance().set(
+        &DataKey::TotalDeposits,
+        &total.checked_add(amount).expect("total deposits overflow"),
+    );
+}
+
+fn read_total_withdrawals(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::TotalWithdrawals)
+        .unwrap_or(0)
+}
+
+fn add_total_withdrawals(env: &Env, amount: i128) {
+    let total = env
+        .storage()
+        .instance()
+        .get::<DataKey, i128>(&DataKey::TotalWithdrawals)
+        .unwrap_or(0);
+    env.storage().instance().set(
+        &DataKey::TotalWithdrawals,
+        &total.checked_add(amount).expect("total withdrawals overflow"),
+    );
+}
+
+fn read_total_boost_allocations(env: &Env) -> u64 {
+    env.storage()
+        .instance()
+        .get(&DataKey::TotalBoostAlloc)
+        .unwrap_or(0)
+}
+
+fn add_total_boost_allocation(env: &Env, delta: i64) {
+    let total = read_total_boost_allocations(env);
+    if delta >= 0 {
+        env.storage().instance().set(
+            &DataKey::TotalBoostAlloc,
+            &total.checked_add(delta as u64).expect("total boost alloc overflow"),
+        );
+    } else {
+        let sub = (-delta) as u64;
+        env.storage().instance().set(
+            &DataKey::TotalBoostAlloc,
+            &total.checked_sub(sub).expect("total boost alloc underflow"),
+        );
+    }
+}
+
+fn read_boost_user_count(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::BoostUserCount)
+        .unwrap_or(0)
+}
+
+fn increment_boost_user_count(env: &Env) {
+    let count = read_boost_user_count(env);
+    env.storage()
+        .instance()
+        .set(&DataKey::BoostUserCount, &(count + 1));
+}
+
+fn decrement_boost_user_count(env: &Env) {
+    let count = read_boost_user_count(env);
+    if count > 0 {
+        env.storage()
+            .instance()
+            .set(&DataKey::BoostUserCount, &(count - 1));
+    }
+}
+
 fn get_position(env: &Env, user: &Address) -> Option<Position> {
     let key = DataKey::UserPosition(user.clone());
     let value: Option<Position> = env.storage().persistent().get(&key);
@@ -621,6 +717,12 @@ impl FarmingPool {
         env.storage()
             .instance()
             .set(&DataKey::TotalCredits, &0i128);
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalDeposits, &0i128);
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalWithdrawals, &0i128);
         env.storage()
             .instance()
             .set(&DataKey::SchemaVersion, &SCHEMA_VERSION);
@@ -1098,6 +1200,8 @@ impl FarmingPool {
             return Err(PoolError::NoActiveStake);
         }
 
+        add_total_withdrawals(&env, total_returned);
+
         // Bank the position and stake credits as separate totals so each staking
         // system's accrual history survives even when a user held both (#145).
         if position_credits > 0 || stake_credits > 0 {
@@ -1372,6 +1476,7 @@ impl FarmingPool {
             increment_staked_user_count(&env);
         }
         add_total_staked(&env, amount);
+        add_total_deposits(&env, amount);
 
         // Pull tokens from caller into the contract.
         let stake_token = get_stake_token(&env)?;
@@ -1425,6 +1530,7 @@ impl FarmingPool {
         }
         increment_unstake_count(&env);
         subtract_total_staked(&env, stake.amount);
+        add_total_withdrawals(&env, stake.amount);
         Ok(total_credits)
     }
 
@@ -1441,6 +1547,17 @@ impl FarmingPool {
         if let Some(mut stake) = get_user_stake(&env, &user) {
             checkpoint(&env, &user, &mut stake);
             set_user_stake(&env, &user, &stake);
+        }
+
+        let old_alloc: u32 = get_user_boost(&env, &user).unwrap_or(0);
+        if old_alloc == 0 {
+            increment_boost_user_count(&env);
+            add_total_boost_allocation(&env, allocation_pct as i64);
+        } else {
+            let delta = allocation_pct as i64 - old_alloc as i64;
+            if delta != 0 {
+                add_total_boost_allocation(&env, delta);
+            }
         }
 
         let key = DataKey::UserBoost(user.clone());
@@ -1716,6 +1833,30 @@ impl FarmingPool {
             .instance()
             .get(&DataKey::TotalDistributedCredits)
             .unwrap_or(0))
+    }
+
+    /// Return the running total of all tokens deposited into the pool.
+    ///
+    /// Incremented by `stake` and `lock_assets` with the amount transferred in.
+    /// Tracks cumulative inflow for protocol flow analytics; compare with
+    /// `total_withdrawals` to derive net flow and with `total_staked` to
+    /// reconcile current TVL against historical turnover.
+    pub fn total_deposits(env: Env) -> Result<i128, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(read_total_deposits(&env))
+    }
+
+    /// Return the running total of all tokens withdrawn from the pool.
+    ///
+    /// Incremented by `unstake`, `unlock_assets`, and `emergency_withdraw`
+    /// with the amount transferred out. Tracks cumulative outflow for
+    /// protocol flow analytics; compare with `total_deposits` to derive
+    /// net flow.
+    pub fn total_withdrawals(env: Env) -> Result<i128, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(read_total_withdrawals(&env))
     }
 
     /// Return the count of currently staked unique users in the pool.

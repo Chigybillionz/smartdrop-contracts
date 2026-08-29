@@ -1,4 +1,4 @@
-use soroban_sdk::{contracterror, contracttype, Address, Vec};
+use soroban_sdk::{contracterror, contracttype, Address, BytesN, Vec};
 
 /// Storage keys used by the factory contract.
 #[contracttype]

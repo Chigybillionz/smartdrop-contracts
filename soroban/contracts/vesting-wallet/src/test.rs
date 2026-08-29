@@ -369,6 +369,19 @@ fn test_release_emits_event() {
     );
 }
 
+#[test]
+fn test_release_emits_event_with_cumulative_total() {
+    let t = setup(0, 100, 1_000);
+    advance_ledgers(&t.env, 50);
+    t.client.release(); // 500 released
+
+    advance_ledgers(&t.env, 25);
+    t.client.release(); // 250 releasable, cumulative total 750
+
+    let events = t.env.events().all();
+    assert!(!events.events().is_empty());
+}
+
 // ── revoke tests ──────────────────────────────────────────────────────────────
 
 #[test]

@@ -71,6 +71,14 @@ fn bump_asset_pools(env: &Env, asset: &Address) {
     );
 }
 
+fn bump_admin_pools(env: &Env, admin: &Address) {
+    env.storage().persistent().extend_ttl(
+        &DataKey::PoolsByAdmin(admin.clone()),
+        TTL_THRESHOLD,
+        TTL_EXTEND_TO,
+    );
+}
+
 /// Reject any call that lands on a factory whose state was never seeded.
 ///
 /// `initialize` is the only writer of `DataKey::Admin`, so its presence is the
@@ -466,6 +474,21 @@ impl Factory {
         limit: u32,
     ) -> Result<ListPoolsResponse, FactoryError> {
         Self::get_pools_by_asset_range(env, asset, start_id, MAX_POOL_SCAN_PER_CALL, limit)
+    }
+
+    /// Return the list of pool IDs created by `admin`.
+    pub fn get_pools_by_admin(env: Env, admin: Address) -> Result<Vec<u32>, FactoryError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        let admin_key = DataKey::PoolsByAdmin(admin.clone());
+        if env.storage().persistent().has(&admin_key) {
+            bump_admin_pools(&env, &admin);
+        }
+        Ok(env
+            .storage()
+            .persistent()
+            .get(&admin_key)
+            .unwrap_or_else(|| vec![&env]))
     }
 
     /// Refresh TTLs for a range of pool records to prevent archival.
@@ -868,6 +891,16 @@ impl Factory {
         asset_pool_ids.push_back(pool_id);
         env.storage().persistent().set(&asset_key, &asset_pool_ids);
         bump_asset_pools(&env, &asset);
+
+        let admin_key = DataKey::PoolsByAdmin(admin.clone());
+        let mut admin_pool_ids: Vec<u32> = env
+            .storage()
+            .persistent()
+            .get(&admin_key)
+            .unwrap_or_else(|| vec![&env]);
+        admin_pool_ids.push_back(pool_id);
+        env.storage().persistent().set(&admin_key, &admin_pool_ids);
+        bump_admin_pools(&env, &admin);
         env.storage()
             .instance()
             .set(&DataKey::PoolCount, &next_count);

@@ -203,6 +203,7 @@ impl VestingWallet {
             &total_amount,
         );
 
+        #[allow(deprecated)]
         env.events().publish(
             (symbol_short!("vest"), symbol_short!("init")),
             (beneficiary, token, total_amount, start_ledger, end_ledger),
@@ -352,10 +353,11 @@ impl VestingWallet {
         bump_instance(&env);
 
         let token = get_token(&env);
-        let amount = token::TokenClient::new(&env, &token)
-            .balance(&env.current_contract_address());
+        let amount = token::TokenClient::new(&env, &token).balance(&env.current_contract_address());
         env.storage().instance().set(&DataKey::Revoked, &true);
-        env.storage().instance().set(&DataKey::RevokedVested, &0i128);
+        env.storage()
+            .instance()
+            .set(&DataKey::RevokedVested, &0i128);
 
         if amount > 0 {
             token::TokenClient::new(&env, &token).transfer(
@@ -368,10 +370,7 @@ impl VestingWallet {
     }
 
     /// Transfer beneficiary rights to `new_beneficiary`. Admin must authorise.
-    pub fn transfer_beneficiary(
-        env: Env,
-        new_beneficiary: Address,
-    ) -> Result<(), VestingError> {
+    pub fn transfer_beneficiary(env: Env, new_beneficiary: Address) -> Result<(), VestingError> {
         require_initialized(&env)?;
         let admin = get_admin(&env);
         admin.require_auth();

@@ -44,7 +44,7 @@ fn daily_rate_to_credit_rate(daily_rate: u128) -> Result<i128, FactoryError> {
     if daily_rate == 0 {
         return Err(FactoryError::InvalidCreditRate);
     }
-    let per_ledger = (daily_rate + LEDGERS_PER_DAY - 1) / LEDGERS_PER_DAY;
+    let per_ledger = daily_rate.div_ceil(LEDGERS_PER_DAY);
     i128::try_from(per_ledger).map_err(|_| FactoryError::InvalidCreditRate)
 }
 
@@ -120,11 +120,7 @@ fn sort_precedes(sort: PoolSort, left: &(u32, PoolRecord), right: &(u32, PoolRec
     ordering.is_lt() || (ordering.is_eq() && left.0 < right.0)
 }
 
-fn insert_sorted(
-    records: &mut Vec<(u32, PoolRecord)>,
-    record: (u32, PoolRecord),
-    sort: PoolSort,
-) {
+fn insert_sorted(records: &mut Vec<(u32, PoolRecord)>, record: (u32, PoolRecord), sort: PoolSort) {
     let mut insert_at: u32 = records.len();
     for (index, existing) in records.iter().enumerate() {
         if sort_precedes(sort, &record, &existing) {
@@ -472,6 +468,7 @@ impl Factory {
                 bump_pool(&env, pool_id);
             }
         }
+        #[allow(deprecated)]
         env.events().publish(
             (symbol_short!("factory"), symbol_short!("ttl_ref")),
             (start_id, end),
@@ -620,10 +617,8 @@ impl Factory {
             .instance()
             .set(&DataKey::PoolCreationPaused, &true);
         #[allow(deprecated)]
-        env.events().publish(
-            (symbol_short!("factory"), symbol_short!("pause_cr")),
-            admin,
-        );
+        env.events()
+            .publish((symbol_short!("factory"), symbol_short!("pause_cr")), admin);
         Ok(())
     }
 
@@ -640,10 +635,8 @@ impl Factory {
             .instance()
             .set(&DataKey::PoolCreationPaused, &false);
         #[allow(deprecated)]
-        env.events().publish(
-            (symbol_short!("factory"), symbol_short!("unps_cr")),
-            admin,
-        );
+        env.events()
+            .publish((symbol_short!("factory"), symbol_short!("unps_cr")), admin);
         Ok(())
     }
 

@@ -2,10 +2,9 @@
 
 use super::*;
 use soroban_sdk::{
-    symbol_short,
     testutils::{Address as _, Events, Ledger},
     token::{StellarAssetClient, TokenClient},
-    Address, Env, IntoVal,
+    Address, Env,
 };
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
@@ -202,10 +201,7 @@ fn test_initialize_rejects_total_amount_above_compute_vested_ceiling() {
         &false,
         &admin,
     );
-    assert!(matches!(
-        result,
-        Err(Ok(VestingError::TotalAmountTooLarge))
-    ));
+    assert!(matches!(result, Err(Ok(VestingError::TotalAmountTooLarge))));
 }
 
 #[test]

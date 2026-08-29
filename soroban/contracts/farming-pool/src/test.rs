@@ -881,7 +881,11 @@ fn test_flash_stake_unstake_in_same_ledger_yields_no_credits() {
     let credits = t.client.unstake(&t.user);
 
     assert_eq!(credits, 0, "flash staking must not mint credits");
-    assert_eq!(t.token.balance(&t.user), initial_balance, "principal fully returned");
+    assert_eq!(
+        t.token.balance(&t.user),
+        initial_balance,
+        "principal fully returned"
+    );
     assert!(t.client.get_stake(&t.user).is_none());
     assert_eq!(t.client.get_credits(&t.user), 0);
 }
@@ -999,7 +1003,10 @@ fn test_accept_admin_requires_proposed_address_auth() {
             },
         }])
         .try_accept_admin();
-    assert!(current_admin_result.is_err(), "current admin may not accept");
+    assert!(
+        current_admin_result.is_err(),
+        "current admin may not accept"
+    );
 
     let third_party_result = client
         .mock_auths(&[MockAuth {
@@ -2076,7 +2083,10 @@ fn test_emergency_withdraw_requires_user_auth() {
             },
         }])
         .try_emergency_withdraw(&user);
-    assert!(unauth_result.is_err(), "third party cannot trigger emergency withdraw without user auth");
+    assert!(
+        unauth_result.is_err(),
+        "third party cannot trigger emergency withdraw without user auth"
+    );
 }
 
 // ── Whitelist system tests ───────────────────────────────────────────────────
@@ -2815,5 +2825,3 @@ fn test_lock_assets_top_up_extends_unlock_ledger() {
     advance_ledgers(&t.env, 3); // now sequence is start_ledger + 15
     t.client.unlock_assets(&t.user, &1_500);
 }
-
-

@@ -135,9 +135,8 @@ fn setup_without_mocked_auth() -> (Env, Address, FactoryClient<'static>, Address
     let factory_addr = env.register(Factory, ());
     let client = FactoryClient::new(&env, &factory_addr);
     client.initialize(&admin, &wasm_hash);
-    let client = unsafe {
-        core::mem::transmute::<FactoryClient<'_>, FactoryClient<'static>>(client)
-    };
+    let client =
+        unsafe { core::mem::transmute::<FactoryClient<'_>, FactoryClient<'static>>(client) };
     (env, factory_addr, client, admin, user)
 }
 
@@ -328,7 +327,7 @@ fn test_list_pools_returns_first_page() {
     assert_eq!(page.records.len(), 10);
     assert_eq!(page.next_start_id, 10);
     assert_eq!(page.total, 25);
-    assert_eq!(page.has_more, true);
+    assert!(page.has_more);
 
     assert_eq!(
         page.records
@@ -352,7 +351,7 @@ fn test_list_pools_returns_second_page() {
     assert_eq!(page.records.len(), 10);
     assert_eq!(page.next_start_id, 20);
     assert_eq!(page.total, 25);
-    assert_eq!(page.has_more, true);
+    assert!(page.has_more);
     assert_eq!(page.records.get(0).map(|record| record.0), Some(10));
     assert_eq!(page.records.get(9).map(|record| record.0), Some(19));
 }
@@ -365,7 +364,7 @@ fn test_list_pools_returns_partial_last_page() {
     assert_eq!(page.records.len(), 5);
     assert_eq!(page.next_start_id, 25);
     assert_eq!(page.total, 25);
-    assert_eq!(page.has_more, false);
+    assert!(!page.has_more);
     assert_eq!(page.records.get(0).map(|record| record.0), Some(20));
     assert_eq!(page.records.get(4).map(|record| record.0), Some(24));
 }
@@ -378,7 +377,7 @@ fn test_list_pools_returns_empty_when_start_is_beyond_count() {
     assert_eq!(page.records.len(), 0);
     assert_eq!(page.next_start_id, 3);
     assert_eq!(page.total, 3);
-    assert_eq!(page.has_more, false);
+    assert!(!page.has_more);
 }
 
 #[test]
@@ -389,7 +388,7 @@ fn test_list_pools_caps_limit_at_twenty() {
     assert_eq!(page.records.len(), 20);
     assert_eq!(page.next_start_id, 20);
     assert_eq!(page.total, 25);
-    assert_eq!(page.has_more, true);
+    assert!(page.has_more);
     assert_eq!(page.records.get(19).map(|record| record.0), Some(19));
 }
 
@@ -401,13 +400,13 @@ fn test_list_pools_has_more_flag_accuracy() {
     let page1 = t.client.list_pools(&0u32, &3u32);
     assert_eq!(page1.records.len(), 3);
     assert_eq!(page1.next_start_id, 3);
-    assert_eq!(page1.has_more, true);
+    assert!(page1.has_more);
 
     // Next page (start 3, limit 3 of 5) -> has_more is false (reaches end: 5)
     let page2 = t.client.list_pools(&page1.next_start_id, &3u32);
     assert_eq!(page2.records.len(), 2);
     assert_eq!(page2.next_start_id, 5);
-    assert_eq!(page2.has_more, false);
+    assert!(!page2.has_more);
 }
 
 // ── get_pools_by_asset ────────────────────────────────────────────────────────
@@ -505,13 +504,9 @@ fn test_transfer_admin_emits_event_with_old_and_new_admin() {
 fn test_upgrade_pool_hot_swaps_registered_pool_without_changing_factory_hash() {
     let t = setup();
     let original_factory_hash = t.client.pool_wasm_hash();
-    let pool_id = t.client.create_pool(
-        &Address::generate(&t.env),
-        &1_728_000u128,
-        &2u32,
-        &10u64,
-        &0i128,
-    );
+    let pool_id = t
+        .client
+        .create_pool(&t.asset, &1_728_000u128, &2u32, &10u64, &0i128);
     let pool_addr = t.client.get_pool(&pool_id).address;
 
     let new_wasm_hash = upload_replacement_wasm(&t.env);
@@ -537,7 +532,13 @@ fn test_upgrade_pool_hot_swaps_registered_pool_without_changing_factory_hash() {
                     symbol_short!("factory").into_val(&t.env),
                     symbol_short!("pool_upg").into_val(&t.env),
                 ],
-                (pool_id, pool_addr.clone(), t.wasm_hash.clone(), new_wasm_hash.clone()).into_val(&t.env),
+                (
+                    pool_id,
+                    pool_addr.clone(),
+                    t.wasm_hash.clone(),
+                    new_wasm_hash.clone()
+                )
+                    .into_val(&t.env),
             )
         ]
     );
@@ -558,13 +559,9 @@ fn test_upgrade_pool_hot_swaps_registered_pool_without_changing_factory_hash() {
 #[test]
 fn test_upgrade_pool_same_hash_returns_pool_upgrade_failed() {
     let t = setup();
-    let pool_id = t.client.create_pool(
-        &Address::generate(&t.env),
-        &1_728_000u128,
-        &2u32,
-        &10u64,
-        &0i128,
-    );
+    let pool_id = t
+        .client
+        .create_pool(&t.asset, &1_728_000u128, &2u32, &10u64, &0i128);
 
     assert_eq!(
         t.client.try_upgrade_pool(&pool_id, &t.wasm_hash),
@@ -585,13 +582,9 @@ fn test_upgrade_pool_missing_pool_returns_not_found() {
 #[test]
 fn test_upgrade_pool_requires_factory_admin_auth() {
     let t = setup();
-    let pool_id = t.client.create_pool(
-        &Address::generate(&t.env),
-        &1_728_000u128,
-        &2u32,
-        &10u64,
-        &0i128,
-    );
+    let pool_id = t
+        .client
+        .create_pool(&t.asset, &1_728_000u128, &2u32, &10u64, &0i128);
 
     let not_admin = Address::generate(&t.env);
     let new_wasm_hash = t.wasm_hash.clone();
@@ -690,20 +683,8 @@ fn test_create_pool_returns_incrementing_ids() {
     let client = FactoryClient::new(&env, &factory_addr);
     client.initialize(&admin, &wasm_hash);
 
-    let id_a = client.create_pool(
-        &asset,
-        &8_640_000u128,
-        &2u32,
-        &100u64,
-        &0i128,
-    );
-    let id_b = client.create_pool(
-        &asset,
-        &17_280_000u128,
-        &3u32,
-        &200u64,
-        &0i128,
-    );
+    let id_a = client.create_pool(&asset, &8_640_000u128, &2u32, &100u64, &0i128);
+    let id_b = client.create_pool(&asset, &17_280_000u128, &3u32, &200u64, &0i128);
     assert_eq!(id_a, 0);
     assert_eq!(id_b, 1);
     assert_eq!(client.pool_count(), 2);
@@ -766,13 +747,7 @@ fn test_get_pools_by_asset_unknown_asset_returns_empty() {
     let client = FactoryClient::new(&env, &factory_addr);
     client.initialize(&admin, &wasm_hash);
 
-    client.create_pool(
-        &asset,
-        &1_728_000u128,
-        &2u32,
-        &10u64,
-        &0i128,
-    );
+    client.create_pool(&asset, &1_728_000u128, &2u32, &10u64, &0i128);
     let unknown = Address::generate(&env);
     let result = client.get_pools_by_asset(&unknown, &0u32, &10u32);
     assert_eq!(result.records.len(), 0);
@@ -936,7 +911,8 @@ fn test_get_pools_by_asset_range_custom_scan_limit() {
     assert_eq!(page1.next_start_id, 50);
 
     // Second call scanning 50..100 should find the match at 90
-    let page2 = client.get_pools_by_asset_range(&sparse_asset, &page1.next_start_id, &50u32, &20u32);
+    let page2 =
+        client.get_pools_by_asset_range(&sparse_asset, &page1.next_start_id, &50u32, &20u32);
     assert_eq!(page2.records.len(), 1);
     assert_eq!(page2.records.get(0).unwrap().0, 90);
     assert_eq!(page2.next_start_id, 100);
@@ -953,13 +929,7 @@ fn test_create_pool_emits_pool_crtd_event() {
     let client = FactoryClient::new(&env, &factory_addr);
     client.initialize(&admin, &wasm_hash);
 
-    client.create_pool(
-        &asset,
-        &5_184_000u128,
-        &2u32,
-        &30u64,
-        &0i128,
-    );
+    client.create_pool(&asset, &5_184_000u128, &2u32, &30u64, &0i128);
     assert!(
         !env.events().all().events().is_empty(),
         "expected pool_crtd event"
@@ -1018,23 +988,15 @@ fn test_create_pool_increments_count_after_each_pool() {
     let t = setup();
 
     assert_eq!(t.client.pool_count(), 0);
-    let id_a = t.client.create_pool(
-        &Address::generate(&t.env),
-        &8_640_000u128,
-        &2u32,
-        &100u64,
-        &0i128,
-    );
+    let id_a = t
+        .client
+        .create_pool(&t.asset, &8_640_000u128, &2u32, &100u64, &0i128);
     assert_eq!(id_a, 0);
     assert_eq!(t.client.pool_count(), 1);
 
-    let id_b = t.client.create_pool(
-        &Address::generate(&t.env),
-        &17_280_000u128,
-        &2u32,
-        &200u64,
-        &0i128,
-    );
+    let id_b = t
+        .client
+        .create_pool(&t.asset, &17_280_000u128, &2u32, &200u64, &0i128);
     assert_eq!(id_b, 1);
     assert_eq!(t.client.pool_count(), 2);
 }
@@ -1050,13 +1012,9 @@ fn test_create_pool_returns_typed_error_when_pool_count_overflows() {
             .set(&DataKey::PoolCount, &u32::MAX);
     });
 
-    let result = t.client.try_create_pool(
-        &Address::generate(&t.env),
-        &1_728_000u128,
-        &2u32,
-        &100u64,
-        &0i128,
-    );
+    let result = t
+        .client
+        .try_create_pool(&t.asset, &1_728_000u128, &2u32, &100u64, &0i128);
 
     assert_eq!(result, Err(Ok(FactoryError::PoolCountOverflow)));
     assert_eq!(t.client.pool_count(), u32::MAX);
@@ -1156,13 +1114,9 @@ fn test_create_pool_rejects_min_lock_period_out_of_u32_range() {
 #[test]
 fn test_get_pool_bumps_pool_record_ttl() {
     let t = setup();
-    let id = t.client.create_pool(
-        &Address::generate(&t.env),
-        &4_320_000u128,
-        &2u32,
-        &50u64,
-        &0i128,
-    );
+    let id = t
+        .client
+        .create_pool(&t.asset, &4_320_000u128, &2u32, &50u64, &0i128);
 
     assert_eq!(pool_record_ttl(&t.env, &t.factory_addr, id), TTL_EXTEND_TO);
 
@@ -1176,13 +1130,9 @@ fn test_get_pool_bumps_pool_record_ttl() {
 #[test]
 fn test_list_pools_bumps_pool_record_ttl() {
     let t = setup();
-    let id = t.client.create_pool(
-        &Address::generate(&t.env),
-        &4_320_000u128,
-        &2u32,
-        &50u64,
-        &0i128,
-    );
+    let id = t
+        .client
+        .create_pool(&t.asset, &4_320_000u128, &2u32, &50u64, &0i128);
 
     assert_eq!(pool_record_ttl(&t.env, &t.factory_addr, id), TTL_EXTEND_TO);
 
@@ -1196,13 +1146,9 @@ fn test_list_pools_bumps_pool_record_ttl() {
 #[test]
 fn test_refresh_pool_ttls_restores_ttl_for_unqueried_pool() {
     let t = setup();
-    let id = t.client.create_pool(
-        &Address::generate(&t.env),
-        &1_728_000u128,
-        &2u32,
-        &50u64,
-        &0i128,
-    );
+    let id = t
+        .client
+        .create_pool(&t.asset, &1_728_000u128, &2u32, &50u64, &0i128);
 
     // Initial TTL after creation
     assert_eq!(pool_record_ttl(&t.env, &t.factory_addr, id), TTL_EXTEND_TO);
@@ -1266,7 +1212,17 @@ fn test_create_pool_emits_pool_crtd_event_with_payload() {
                     symbol_short!("factory").into_val(&t.env),
                     symbol_short!("pool_crtd").into_val(&t.env),
                 ],
-                (id, expected_address, asset, 300i128, 2u32, 30u32, 5_184_000u128, t.wasm_hash.clone()).into_val(&t.env),
+                (
+                    id,
+                    expected_address,
+                    asset,
+                    300i128,
+                    2u32,
+                    30u32,
+                    5_184_000u128,
+                    t.wasm_hash.clone()
+                )
+                    .into_val(&t.env),
             )
         ]
     );
@@ -1300,7 +1256,7 @@ fn test_old_admin_cannot_create_pool_after_transfer_but_new_admin_can() {
     );
     assert_eq!(t.client.pool_count(), 0);
 
-    let new_asset = Address::generate(&t.env);
+    let new_asset = t.asset.clone();
     let new_args = (&new_asset, 3_456_000u128, 2u32, 20u64, 0i128).into_val(&t.env);
     let new_invoke = MockAuthInvoke {
         contract: &t.factory_addr,
@@ -1354,10 +1310,10 @@ fn test_create_pool_initializes_real_farming_pool_atomically() {
 #[test]
 fn test_pause_pool_creation_prevents_create_pool() {
     let t = setup();
-    assert_eq!(t.client.is_pool_creation_paused(), false);
+    assert!(!t.client.is_pool_creation_paused());
 
     t.client.pause_pool_creation();
-    assert_eq!(t.client.is_pool_creation_paused(), true);
+    assert!(t.client.is_pool_creation_paused());
 
     let asset = t.asset.clone();
     let result = t
@@ -1371,10 +1327,10 @@ fn test_pause_pool_creation_prevents_create_pool() {
 fn test_unpause_pool_creation_allows_create_pool() {
     let t = setup();
     t.client.pause_pool_creation();
-    assert_eq!(t.client.is_pool_creation_paused(), true);
+    assert!(t.client.is_pool_creation_paused());
 
     t.client.unpause_pool_creation();
-    assert_eq!(t.client.is_pool_creation_paused(), false);
+    assert!(!t.client.is_pool_creation_paused());
 
     let asset = t.asset.clone();
     let pool_id = t

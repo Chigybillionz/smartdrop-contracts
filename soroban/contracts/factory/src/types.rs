@@ -110,7 +110,7 @@ pub enum FactoryError {
     /// `upgrade_pool` failed because the target pool does not support upgrades
     /// (e.g. older deployment without upgrade/admin entry points) or the upgrade call failed.
     PoolUpgradeFailed = 10,
-        /// `create_pool`'s asset does not respond as a valid token contract.
+    /// `create_pool`'s asset does not respond as a valid token contract.
     InvalidAsset = 11,
     /// `create_pool`'s minimum stake is below the protocol dust threshold.
     InvalidMinStakeAmount = 12,

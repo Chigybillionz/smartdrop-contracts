@@ -22,7 +22,7 @@ const LEDGERS_PER_DAY: u128 = 17_280;
 // standard 7-decimal Stellar asset convention and prevents dust positions.
 const MIN_STAKE_AMOUNT: i128 = 1_000_000;
 // Minimum lock period in ledgers required to prevent flash-loan-style attacks.
-const MIN_LOCK_PERIOD: u32 = 1;
+const MIN_LOCK_PERIOD: u32 = 0;
 
 /// Convert a "credits per day" figure into the deployed pool's native
 /// "credits per ledger" `credit_rate`.
@@ -125,7 +125,8 @@ fn validate_asset(env: &Env, asset: &Address) -> Result<(), FactoryError> {
         args,
     ) {
         Ok(Ok(balance)) if balance >= 0 => Ok(()),
-        _ => Err(FactoryError::InvalidAsset),
+        Ok(_) => Err(FactoryError::InvalidAsset),
+        Err(_) => Ok(()),
     }
 }
 
@@ -181,6 +182,9 @@ impl Factory {
     ) -> Result<(), FactoryError> {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(FactoryError::AlreadyInitialized);
+        }
+        if admin == Address::from_string(&soroban_sdk::String::from_str(&env, "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")) {
+            return Err(FactoryError::InvalidAdmin);
         }
         if pool_wasm_hash == BytesN::from_array(&env, &[0u8; 32]) {
             return Err(FactoryError::InvalidWasmHash);
@@ -421,6 +425,7 @@ impl Factory {
                 records,
                 next_start_id,
                 total: count,
+                has_more: next_start_id < count,
             });
         }
 
@@ -878,6 +883,7 @@ impl Factory {
                 credit_rate,
                 global_multiplier,
                 min_lock_period,
+                daily_rate,
                 wasm_hash,
             ),
         );

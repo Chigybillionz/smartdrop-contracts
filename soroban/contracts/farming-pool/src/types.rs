@@ -115,6 +115,8 @@ pub enum DataKey {
     LockCount,
     /// Running count of total unstake operations performed.
     UnstakeCount,
+    TotalCredits,
+    EmergencyWithdrawalCount,
 }
 
 /// Paginated response for `get_whitelisted_users`.
@@ -125,5 +127,4 @@ pub struct ListWhitelistedResponse {
     pub users: Vec<Address>,
     /// Total number of whitelisted addresses.
     pub total: u32,
-    TotalCredits,
 }

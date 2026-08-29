@@ -17,6 +17,8 @@ pub enum DataKey {
     AdminTransferCount,
     /// Running total of successful `upgrade_pool` calls, for version tracking (#258).
     UpgradeCount,
+    /// List of pool IDs for a specific asset.
+    AssetPools(Address),
 }
 
 /// On-chain record for a registered farming pool.
@@ -123,5 +125,7 @@ pub enum FactoryError {
     /// `set_pool_wasm_hash` or `initialize` was called with an all-zero WASM hash.
     InvalidWasmHash = 14,
     /// `create_pool`'s minimum lock period is below the minimum allowed threshold.
-    MinLockPeriodTooShort = 14,
+    MinLockPeriodTooShort = 15,
+    /// `initialize` was called with an invalid admin address.
+    InvalidAdmin = 16,
 }

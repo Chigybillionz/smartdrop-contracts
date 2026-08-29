@@ -115,18 +115,8 @@ pub enum DataKey {
     LockCount,
     /// Running count of total unstake operations performed.
     UnstakeCount,
-    /// Running total of all tokens deposited into the pool (stake + lock).
-    TotalDeposits,
-    /// Running total of all tokens withdrawn from the pool (unstake + unlock + emergency).
-    TotalWithdrawals,
-    /// Total credits accrued in the position (lock) system.
     TotalCredits,
-    /// Running count of successful emergency_withdraw calls.
     EmergencyWithdrawalCount,
-    /// Sum of all active user boost allocation percentages (for average computation).
-    TotalBoostAlloc,
-    /// Count of users currently with a non-zero boost allocation set.
-    BoostUserCount,
 }
 
 /// Paginated response for `get_whitelisted_users`.

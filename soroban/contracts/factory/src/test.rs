@@ -1459,3 +1459,22 @@ fn test_admin_transfer_count_increments_on_transfer() {
     assert!(result.is_err());
     assert_eq!(t.client.admin_transfer_count(), 2);
 }
+
+#[test]
+fn test_get_pools_by_admin_returns_created_pools() {
+    let t = setup();
+    assert_eq!(t.client.get_pools_by_admin(&t.admin), vec![&t.env]);
+
+    let asset1 = Address::generate(&t.env);
+    let id1 = t
+        .client
+        .create_pool(&asset1, &1_728_000u128, &2u32, &10u64, &0i128);
+
+    let asset2 = Address::generate(&t.env);
+    let id2 = t
+        .client
+        .create_pool(&asset2, &3_456_000u128, &2u32, &20u64, &0i128);
+
+    let pools = t.client.get_pools_by_admin(&t.admin);
+    assert_eq!(pools, vec![&t.env, id1, id2]);
+}

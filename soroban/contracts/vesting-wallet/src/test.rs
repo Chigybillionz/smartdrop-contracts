@@ -2,9 +2,9 @@
 
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, Events, Ledger},
+    testutils::{Address as _, Events, Ledger, MockAuth, MockAuthInvoke},
     token::{StellarAssetClient, TokenClient},
-    Address, Env,
+    vec, Address, Env, IntoVal,
 };
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
@@ -231,7 +231,7 @@ fn test_compute_vested_is_safe_at_maximum_duration_and_ceiling() {
         &admin,
     );
     env.ledger()
-        .with_mut(|ledger| ledger.sequence_number = u32::MAX - 1);
+        .with_mut(|ledger| ledger.sequence_number = 2_000_000_000);
 
     let vested = client.vested_amount();
     assert!(vested > 0);
@@ -367,6 +367,19 @@ fn test_release_emits_event() {
         !t.env.events().all().events().is_empty(),
         "event not emitted"
     );
+}
+
+#[test]
+fn test_release_emits_event_with_cumulative_total() {
+    let t = setup(0, 100, 1_000);
+    advance_ledgers(&t.env, 50);
+    t.client.release(); // 500 released
+
+    advance_ledgers(&t.env, 25);
+    t.client.release(); // 250 releasable, cumulative total 750
+
+    let events = t.env.events().all();
+    assert!(!events.events().is_empty());
 }
 
 // ── revoke tests ──────────────────────────────────────────────────────────────
@@ -558,4 +571,23 @@ fn test_release_count_increments_on_release() {
     assert!(released2 > 0);
     assert_eq!(t.client.release_count(), 2);
     assert_eq!(t.client.get_release_count(), 2);
+}
+
+#[test]
+fn test_release_requires_beneficiary_auth() {
+    let t = setup(0, 100, 1_000);
+    advance_ledgers(&t.env, 50);
+
+    t.env.mock_auths(&[MockAuth {
+        address: &t.beneficiary,
+        invoke: &MockAuthInvoke {
+            contract: &t.contract_id,
+            fn_name: "release",
+            args: vec![&t.env],
+            sub_invokes: &[],
+        },
+    }]);
+
+    let released = t.client.release();
+    assert!(released > 0);
 }

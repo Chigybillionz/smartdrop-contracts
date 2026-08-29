@@ -242,7 +242,7 @@ fn end_to_end_create_pool_then_stake_and_unstake() {
     // (factory's admin became the pool's admin, so this is authorized).
     pool_client.set_global_multiplier(&global_multiplier);
 
-    let stake_amount: i128 = 1_000;
+    let stake_amount: i128 = 1_000_000;
     pool_client.stake(&user, &stake_amount);
 
     // Stake debited from the user, credited to the pool contract.
@@ -277,7 +277,7 @@ fn end_to_end_create_pool_then_stake_and_unstake() {
     let expected_credits = period1_credits + period2_credits;
 
     assert_eq!(total_credits, expected_credits);
-    assert_eq!(total_credits, 40_000);
+    assert_eq!(total_credits, 40_000_000);
 
     // Full principal returned; pool and user balances reconcile exactly.
     assert_eq!(token.balance(&user), INITIAL_MINT);
@@ -332,7 +332,7 @@ fn end_to_end_create_pool_then_lock_and_unlock() {
     // (factory's admin became the pool's admin, so this is authorized).
     pool_client.set_credit_rate(&credit_rate);
 
-    let lock_amount: i128 = 2_000;
+    let lock_amount: i128 = 2_000_000;
     pool_client.lock_assets(&user, &lock_amount);
 
     assert_eq!(token.balance(&user), INITIAL_MINT - lock_amount);
@@ -354,7 +354,7 @@ fn end_to_end_create_pool_then_lock_and_unlock() {
     // Advance past the remaining lock period (30 + 30 = 60 >= 50).
     advance_ledgers(&env, 30);
 
-    let partial_unlock: i128 = 800;
+    let partial_unlock: i128 = 800_000;
     pool_client.unlock_assets(&user, &partial_unlock);
 
     let remaining = lock_amount - partial_unlock;

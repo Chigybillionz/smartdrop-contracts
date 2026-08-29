@@ -340,6 +340,7 @@ fn increment_unstake_count(env: &Env) {
     env.storage()
         .instance()
         .set(&DataKey::UnstakeCount, &(count + 1));
+}
 fn get_emergency_withdrawal_count(env: &Env) -> u32 {
     env.storage()
         .instance()
@@ -509,15 +510,38 @@ fn compute_stake_accrual(env: &Env, user: &Address, stake: &UserStake, current: 
 /// avoids front-running concerns around rate changes, and ensures that the
 /// cost of a rate change is O(1) rather than O(n) in the number of users.
 /// Integrators should be aware that a user's on-chain credit balance may
-/// temporarily reflect an outdated rate until their next checkpoint.
+fn add_total_credits(env: &Env, amount: i128) {
+    if amount <= 0 {
+        return;
+    }
+    let current = read_total_credits(env);
+    env.storage()
+        .instance()
+        .set(&DataKey::TotalCredits, &(current + amount));
+}
+
+/// Helper function to perform a checkpoint on a user's `UserStake`.
+///
+/// Computes and banks accrued credits based on the active boost configuration,
+/// updates `start_ledger`, and snapshots current global multiplier / credit rate.
+/// Emits `(symbol_short!("pool"), symbol_short!("chkpt"))` when accrued > 0.
 fn checkpoint(env: &Env, user: &Address, stake: &mut UserStake) {
     let current = env.ledger().sequence();
     let accrued = compute_stake_accrual(env, user, stake, current);
     stake.credits_banked += accrued;
+    add_total_credits(env, accrued);
     add_total_distributed_credits(env, accrued);
     stake.start_ledger = current;
     stake.credit_rate = read_credit_rate(env);
     stake.multiplier = read_global_multiplier(env);
+
+    if accrued > 0 {
+        #[allow(deprecated)]
+        env.events().publish(
+            (symbol_short!("pool"), symbol_short!("chkpt")),
+            (user.clone(), accrued, stake.credits_banked),
+        );
+    }
 }
 
 fn checkpoint_position(env: &Env, user: &Address, position: &mut Position) {
@@ -526,8 +550,17 @@ fn checkpoint_position(env: &Env, user: &Address, position: &mut Position) {
     let delta = position.amount * position.credit_rate * elapsed as i128;
     position.total_credits += delta;
     add_total_credits(env, delta);
+    add_total_distributed_credits(env, delta);
     position.checkpoint_ledger = current;
     position.credit_rate = read_credit_rate(env);
+
+    if delta > 0 {
+        #[allow(deprecated)]
+        env.events().publish(
+            (symbol_short!("pool"), symbol_short!("chkpt")),
+            (user.clone(), delta, position.total_credits),
+        );
+    }
 }
 
 #[contract]
@@ -694,9 +727,26 @@ impl FarmingPool {
         bump_instance(&env);
 
         let current = read_schema_version(&env);
+        let mut version = current;
+        while version < SCHEMA_VERSION {
+            match version {
+                0 => {
+                    // Initial schema tracking migration (v0 -> v1)
+                    version = 1;
+                }
+                _ => break,
+            }
+        }
+
         env.storage()
             .instance()
             .set(&DataKey::SchemaVersion, &SCHEMA_VERSION);
+
+        #[allow(deprecated)]
+        env.events().publish(
+            (symbol_short!("pool"), symbol_short!("migrated")),
+            (current, SCHEMA_VERSION),
+        );
         Ok(current)
     }
 
@@ -1209,7 +1259,7 @@ impl FarmingPool {
         require_initialized(&env)?;
         get_admin(&env)?.require_auth();
         if users.len() > 50 {
-            return Err(PoolError::BatchTooLarge);
+            panic!("max 50 addresses per call");
         }
         bump_instance(&env);
 
@@ -1236,7 +1286,7 @@ impl FarmingPool {
         require_initialized(&env)?;
         get_admin(&env)?.require_auth();
         if users.len() > 50 {
-            return Err(PoolError::BatchTooLarge);
+            panic!("max 50 addresses per call");
         }
         bump_instance(&env);
 

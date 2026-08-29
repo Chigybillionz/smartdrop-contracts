@@ -228,11 +228,15 @@ impl VestingWallet {
 
     /// Transfer all vested-but-unclaimed tokens to the beneficiary.
     ///
-    /// Permissionless: tokens always flow to the stored beneficiary address.
+    /// Requires beneficiary authorization so third parties cannot force-release
+    /// tokens at unexpected times (e.g. tax events).
     /// Returns the amount transferred (0 if nothing is releasable).
     pub fn release(env: Env) -> Result<i128, VestingError> {
         require_initialized(&env)?;
         bump_instance(&env);
+
+        let beneficiary = get_beneficiary(&env);
+        beneficiary.require_auth();
 
         let vested = compute_vested(&env)?;
         let released = get_released(&env);
@@ -248,7 +252,6 @@ impl VestingWallet {
             .instance()
             .set(&DataKey::ReleasedAmount, &(released + releasable));
 
-        let beneficiary = get_beneficiary(&env);
         token::TokenClient::new(&env, &get_token(&env)).transfer(
             &env.current_contract_address(),
             &beneficiary,

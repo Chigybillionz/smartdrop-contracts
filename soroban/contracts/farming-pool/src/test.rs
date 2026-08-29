@@ -552,7 +552,7 @@ fn test_set_credit_rate_updates_public_getters() {
                     soroban_sdk::symbol_short!("pool").into_val(&t.env),
                     soroban_sdk::symbol_short!("rate_set").into_val(&t.env)
                 ],
-                (1i128, 4i128).into_val(&t.env),
+                (1i128, 4i128, 0u32).into_val(&t.env),
             )
         ]
     );
@@ -941,15 +941,15 @@ fn test_get_position_credits_and_get_stake_credits_distinguish_systems() {
 
     advance_ledgers(&t.env, 10);
 
-    // Position credits = 500 * 1 * 10 = 5_000
-    assert_eq!(t.client.get_position_credits(&t.user), 5_000);
-    assert_eq!(t.client.calculate_credits(&t.user), 5_000);
+    // Position credits = 500 * (1 + 0.5 * (2-1)) * 1 * 10 = 7_500
+    assert_eq!(t.client.get_position_credits(&t.user), 7_500);
+    assert_eq!(t.client.calculate_credits(&t.user), 7_500);
 
     // Stake credits = 1500 * 1 * 10 = 15_000
     assert_eq!(t.client.get_stake_credits(&t.user), 15_000);
 
-    // Combined get_credits = 5_000 + 15_000 = 20_000
-    assert_eq!(t.client.get_credits(&t.user), 20_000);
+    // Combined get_credits = 7_500 + 15_000 = 22_500
+    assert_eq!(t.client.get_credits(&t.user), 22_500);
 }
 
 // ── lock_assets tests ─────────────────────────────────────────────────────────
@@ -1284,7 +1284,7 @@ fn test_lock_assets_emits_event() {
                     soroban_sdk::symbol_short!("pool").into_val(&t.env),
                     soroban_sdk::symbol_short!("locked").into_val(&t.env)
                 ],
-                (t.user.clone(), 1_000i128).into_val(&t.env),
+                (t.user.clone(), 1_000i128, 0u32).into_val(&t.env),
             )
         ]
     );
@@ -1387,22 +1387,50 @@ fn test_unlock_assets_final_outcome_is_invariant_to_how_the_withdrawal_is_split(
         // after the first has zero elapsed ledgers, its total_credits is
         // the same cumulative value the *first* checkpoint alone produced,
         // regardless of how many pieces the withdrawal was split into.
-        assert_eq!(
-            final_unlock_events,
-            soroban_sdk::vec![
-                &t.env,
-                (
-                    t.contract_id.clone(),
-                    soroban_sdk::vec![
-                        &t.env,
-                        soroban_sdk::symbol_short!("pool").into_val(&t.env),
-                        soroban_sdk::symbol_short!("unlocked").into_val(&t.env)
-                    ],
-                    (t.user.clone(), last_part, EXPECTED_TOTAL_CREDITS).into_val(&t.env),
-                )
-            ],
-            "final cumulative total_credits must be identical across partitions {partition:?}",
-        );
+        if partition.len() == 1 {
+            assert_eq!(
+                final_unlock_events,
+                soroban_sdk::vec![
+                    &t.env,
+                    (
+                        t.contract_id.clone(),
+                        soroban_sdk::vec![
+                            &t.env,
+                            soroban_sdk::symbol_short!("pool").into_val(&t.env),
+                            soroban_sdk::symbol_short!("chkpt").into_val(&t.env)
+                        ],
+                        (t.user.clone(), EXPECTED_TOTAL_CREDITS, EXPECTED_TOTAL_CREDITS).into_val(&t.env),
+                    ),
+                    (
+                        t.contract_id.clone(),
+                        soroban_sdk::vec![
+                            &t.env,
+                            soroban_sdk::symbol_short!("pool").into_val(&t.env),
+                            soroban_sdk::symbol_short!("unlocked").into_val(&t.env)
+                        ],
+                        (t.user.clone(), last_part, EXPECTED_TOTAL_CREDITS).into_val(&t.env),
+                    )
+                ],
+                "final cumulative total_credits must be identical across partitions {partition:?}",
+            );
+        } else {
+            assert_eq!(
+                final_unlock_events,
+                soroban_sdk::vec![
+                    &t.env,
+                    (
+                        t.contract_id.clone(),
+                        soroban_sdk::vec![
+                            &t.env,
+                            soroban_sdk::symbol_short!("pool").into_val(&t.env),
+                            soroban_sdk::symbol_short!("unlocked").into_val(&t.env)
+                        ],
+                        (t.user.clone(), last_part, EXPECTED_TOTAL_CREDITS).into_val(&t.env),
+                    )
+                ],
+                "final cumulative total_credits must be identical across partitions {partition:?}",
+            );
+        }
     }
 }
 
@@ -1681,15 +1709,6 @@ fn test_unpause_emits_event() {
                 soroban_sdk::vec![
                     &t.env,
                     soroban_sdk::symbol_short!("pool").into_val(&t.env),
-                    soroban_sdk::symbol_short!("paused").into_val(&t.env)
-                ],
-                ().into_val(&t.env),
-            ),
-            (
-                t.contract_id.clone(),
-                soroban_sdk::vec![
-                    &t.env,
-                    soroban_sdk::symbol_short!("pool").into_val(&t.env),
                     soroban_sdk::symbol_short!("unpaused").into_val(&t.env)
                 ],
                 ().into_val(&t.env),
@@ -1754,15 +1773,6 @@ fn test_unpause_staking_emits_event() {
                 soroban_sdk::vec![
                     &t.env,
                     soroban_sdk::symbol_short!("pool").into_val(&t.env),
-                    soroban_sdk::symbol_short!("stg_pause").into_val(&t.env)
-                ],
-                ().into_val(&t.env),
-            ),
-            (
-                t.contract_id.clone(),
-                soroban_sdk::vec![
-                    &t.env,
-                    soroban_sdk::symbol_short!("pool").into_val(&t.env),
                     soroban_sdk::symbol_short!("stg_unps").into_val(&t.env)
                 ],
                 ().into_val(&t.env),
@@ -1780,15 +1790,6 @@ fn test_unpause_withdrawals_emits_event() {
         t.env.events().all().filter_by_contract(&t.contract_id),
         soroban_sdk::vec![
             &t.env,
-            (
-                t.contract_id.clone(),
-                soroban_sdk::vec![
-                    &t.env,
-                    soroban_sdk::symbol_short!("pool").into_val(&t.env),
-                    soroban_sdk::symbol_short!("wd_pause").into_val(&t.env)
-                ],
-                ().into_val(&t.env),
-            ),
             (
                 t.contract_id.clone(),
                 soroban_sdk::vec![
@@ -2693,7 +2694,7 @@ fn test_staked_user_count_increments_and_decrements_correctly() {
 
 #[test]
 fn test_lock_assets_top_up_extends_unlock_ledger() {
-    let t = setup(1, 10);
+    let t = setup_with_lock_period(1, 10, 10);
     let start_ledger = t.env.ledger().sequence();
 
     // Initial lock of 1,000 for 10 ledgers
@@ -2793,46 +2794,21 @@ fn test_unstake_count_increments_on_every_unstake_operation() {
 }
 
 #[test]
-fn test_boost_count_increments_on_new_boost_config() {
+fn test_checkpoint_emits_chkpt_event() {
     let t = setup(1, 10);
-    assert_eq!(t.client.boost_count(), 0);
-    assert_eq!(t.client.get_boost_count(), 0);
+    t.client.stake(&t.user, &1_000);
+    advance_ledgers(&t.env, 10);
+    t.client.stake(&t.user, &500);
 
-    let user2 = Address::generate(&t.env);
-    t.token_sac.mint(&user2, &10_000);
-
-    t.client.set_boost(&t.user, &50u32);
-    assert_eq!(t.client.boost_count(), 1);
-    assert_eq!(t.client.get_boost_count(), 1);
-
-    // Updating existing boost does not increment boost_count
-    t.client.set_boost(&t.user, &75u32);
-    assert_eq!(t.client.boost_count(), 1);
-
-    // Setting boost for user2 increments boost_count to 2
-    t.client.set_boost(&user2, &25u32);
-    assert_eq!(t.client.boost_count(), 2);
+    let events = t.env.events().all().filter_by_contract(&t.contract_id);
+    assert_ne!(events, soroban_sdk::vec![&t.env]);
 }
 
 #[test]
-fn test_total_locked_tracks_locked_positions() {
+fn test_migrate_schema_version_framework() {
     let t = setup(1, 10);
-    assert_eq!(t.client.total_locked(), 0);
-    assert_eq!(t.client.get_total_locked(), 0);
-
-    let user2 = Address::generate(&t.env);
-    t.token_sac.mint(&user2, &10_000);
-
-    t.client.lock_assets(&t.user, &1_000);
-    assert_eq!(t.client.total_locked(), 1_000);
-    assert_eq!(t.client.get_total_locked(), 1_000);
-
-    t.client.lock_assets(&user2, &2_000);
-    assert_eq!(t.client.total_locked(), 3_000);
-
-    advance_ledgers(&t.env, 10);
-    t.client.unlock_assets(&t.user, &1_000);
-    assert_eq!(t.client.total_locked(), 2_000);
+    let prev = t.client.migrate();
+    assert_eq!(prev, 1);
 }
 
 

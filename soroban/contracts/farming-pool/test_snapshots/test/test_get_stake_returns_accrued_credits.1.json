@@ -352,6 +352,30 @@
                       "key": {
                         "vec": [
                           {
+                            "symbol": "BoostCount"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "u32": 1
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "BoostUserCount"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "u32": 1
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
                             "symbol": "CreditRate"
                           }
                         ]
@@ -436,12 +460,36 @@
                       "key": {
                         "vec": [
                           {
+                            "symbol": "TotalBoostAlloc"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "u64": "50"
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
                             "symbol": "TotalCredits"
                           }
                         ]
                       },
                       "val": {
                         "i128": "0"
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "TotalDeposits"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "i128": "1000"
                       }
                     },
                     {
@@ -460,12 +508,36 @@
                       "key": {
                         "vec": [
                           {
+                            "symbol": "TotalLocked"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "i128": "0"
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
                             "symbol": "TotalStaked"
                           }
                         ]
                       },
                       "val": {
                         "i128": "1000"
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "TotalWithdrawals"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "i128": "0"
                       }
                     }
                   ]

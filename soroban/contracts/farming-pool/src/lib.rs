@@ -278,12 +278,17 @@ fn subtract_total_locked(env: &Env, amount: i128) {
 }
 
 fn read_boost_count(env: &Env) -> u32 {
-    env.storage().instance().get(&DataKey::BoostCount).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::BoostCount)
+        .unwrap_or(0)
 }
 
 fn increment_boost_count(env: &Env) {
     let count = read_boost_count(env);
-    env.storage().instance().set(&DataKey::BoostCount, &(count + 1));
+    env.storage()
+        .instance()
+        .set(&DataKey::BoostCount, &(count + 1));
 }
 
 fn is_user_staked(env: &Env, user: &Address) -> bool {
@@ -350,9 +355,10 @@ fn get_emergency_withdrawal_count(env: &Env) -> u32 {
 
 fn increment_emergency_withdrawal_count(env: &Env) {
     let count = get_emergency_withdrawal_count(env);
-    env.storage()
-        .instance()
-        .set(&DataKey::EmergencyWithdrawalCount, &(count.saturating_add(1)));
+    env.storage().instance().set(
+        &DataKey::EmergencyWithdrawalCount,
+        &(count.saturating_add(1)),
+    );
 }
 
 fn set_banked_credits(env: &Env, user: &Address, totals: BankedCreditTotals) {
@@ -419,7 +425,9 @@ fn add_total_withdrawals(env: &Env, amount: i128) {
         .unwrap_or(0);
     env.storage().instance().set(
         &DataKey::TotalWithdrawals,
-        &total.checked_add(amount).expect("total withdrawals overflow"),
+        &total
+            .checked_add(amount)
+            .expect("total withdrawals overflow"),
     );
 }
 
@@ -435,7 +443,9 @@ fn add_total_boost_allocation(env: &Env, delta: i64) {
     if delta >= 0 {
         env.storage().instance().set(
             &DataKey::TotalBoostAlloc,
-            &total.checked_add(delta as u64).expect("total boost alloc overflow"),
+            &total
+                .checked_add(delta as u64)
+                .expect("total boost alloc overflow"),
         );
     } else {
         let sub = (-delta) as u64;
@@ -460,6 +470,10 @@ fn increment_boost_user_count(env: &Env) {
         .set(&DataKey::BoostUserCount, &(count + 1));
 }
 
+// `set_boost` rejects a zero `allocation_pct` (see `test_set_boost_rejects_zero_allocation`),
+// so there is currently no path that clears a user's boost back to zero. Kept as the
+// symmetric counterpart to `increment_boost_user_count` for when such a path is added.
+#[allow(dead_code)]
 fn decrement_boost_user_count(env: &Env) {
     let count = read_boost_user_count(env);
     if count > 0 {
@@ -606,16 +620,8 @@ fn compute_stake_accrual(env: &Env, user: &Address, stake: &UserStake, current: 
 /// avoids front-running concerns around rate changes, and ensures that the
 /// cost of a rate change is O(1) rather than O(n) in the number of users.
 /// Integrators should be aware that a user's on-chain credit balance may
-fn add_total_credits(env: &Env, amount: i128) {
-    if amount <= 0 {
-        return;
-    }
-    let current = read_total_credits(env);
-    env.storage()
-        .instance()
-        .set(&DataKey::TotalCredits, &(current + amount));
-}
-
+/// temporarily reflect an outdated rate until their next checkpoint.
+///
 /// Helper function to perform a checkpoint on a user's `UserStake`.
 ///
 /// Computes and banks accrued credits based on the active boost configuration,
@@ -714,9 +720,7 @@ impl FarmingPool {
             .set(&DataKey::MinStakeAmount, &min_stake);
         env.storage().instance().set(&DataKey::TotalStaked, &0i128);
         env.storage().instance().set(&DataKey::TotalLocked, &0i128);
-        env.storage()
-            .instance()
-            .set(&DataKey::TotalCredits, &0i128);
+        env.storage().instance().set(&DataKey::TotalCredits, &0i128);
         env.storage()
             .instance()
             .set(&DataKey::TotalDeposits, &0i128);
@@ -1780,7 +1784,21 @@ impl FarmingPool {
         Ok(min_stake)
     }
 
-    /// Return the current stake record for `user`, or `None` if not staked.
+    /// Return the current stake record for `user`, or `None` if not staked (#234).
+    ///
+    /// `credits_banked` in the returned record is not a stale checkpoint: it is
+    /// computed on the fly by adding accrual since `start_ledger` up to the
+    /// current ledger, the same way `get_credits`/`get_stake_credits` do for
+    /// this staking system. The returned `start_ledger`, `credit_rate`, and
+    /// `multiplier` reflect this fresh checkpoint too, but — unlike `stake`,
+    /// `unstake`, and `set_boost` — none of this is persisted; the on-chain
+    /// record is left untouched by this read-only call.
+    ///
+    /// This total covers only the flexible/boost staking system (`UserStake`).
+    /// A user who also holds a locked `Position`, or who has credits carried
+    /// over from a prior `emergency_withdraw`, has additional balances not
+    /// reflected here — use `get_credits` for the fully merged total across
+    /// all systems.
     pub fn get_stake(env: Env, user: Address) -> Result<Option<UserStake>, PoolError> {
         require_initialized(&env)?;
         bump_instance(&env);

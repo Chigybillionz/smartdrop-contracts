@@ -67,7 +67,7 @@
                   "u32": 1
                 },
                 {
-                  "u64": "0"
+                  "u64": "1"
                 },
                 {
                   "i128": "0"
@@ -456,7 +456,7 @@
                       "symbol": "min_lock_period"
                     },
                     "val": {
-                      "u32": 0
+                      "u32": 1
                     }
                   },
                   {
@@ -466,6 +466,37 @@
                     "val": {
                       "bytes": "248b00188bdc5aea0d894b42ff62864651d54c7488fdf78384b2ce229ed0347f"
                     }
+                  }
+                ]
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 1036800
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "PoolsByAdmin"
+                  },
+                  {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "vec": [
+                  {
+                    "u32": 0
                   }
                 ]
               }
@@ -634,7 +665,7 @@
                         ]
                       },
                       "val": {
-                        "u32": 0
+                        "u32": 1
                       }
                     },
                     {

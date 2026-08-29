@@ -19,6 +19,10 @@ pub enum DataKey {
     UpgradeCount,
     /// List of pool IDs for a specific asset.
     AssetPools(Address),
+    /// List of pool IDs created by a specific admin.
+    PoolsByAdmin(Address),
+    /// List of pool IDs currently running a specific WASM hash.
+    PoolsByWasmHash(BytesN<32>),
 }
 
 /// On-chain record for a registered farming pool.

@@ -4,7 +4,7 @@ use super::*;
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger, MockAuth, MockAuthInvoke},
     token::{StellarAssetClient, TokenClient},
-    vec, Address, Env, IntoVal,
+    vec, Address, Env,
 };
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
@@ -201,10 +201,7 @@ fn test_initialize_rejects_total_amount_above_compute_vested_ceiling() {
         &false,
         &admin,
     );
-    assert!(matches!(
-        result,
-        Err(Ok(VestingError::TotalAmountTooLarge))
-    ));
+    assert!(matches!(result, Err(Ok(VestingError::TotalAmountTooLarge))));
 }
 
 #[test]
@@ -402,6 +399,29 @@ fn test_revoke_twice_returns_already_revoked() {
     assert!(matches!(
         t.client.try_revoke(),
         Err(Ok(VestingError::AlreadyRevoked))
+    ));
+}
+
+#[test]
+fn test_revoked_reflects_revocation_state() {
+    let t = setup_revocable(0, 200, 1_000);
+    advance_ledgers(&t.env, 100);
+    assert!(!t.client.revoked());
+
+    t.client.revoke();
+    assert!(t.client.revoked());
+}
+
+#[test]
+fn test_revoked_uninitialized_returns_not_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(VestingWallet, ());
+    let client = VestingWalletClient::new(&env, &contract_id);
+
+    assert!(matches!(
+        client.try_revoked(),
+        Err(Ok(VestingError::NotInitialized))
     ));
 }
 

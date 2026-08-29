@@ -901,7 +901,11 @@ fn test_flash_stake_unstake_in_same_ledger_yields_no_credits() {
     let credits = t.client.unstake(&t.user);
 
     assert_eq!(credits, 0, "flash staking must not mint credits");
-    assert_eq!(t.token.balance(&t.user), initial_balance, "principal fully returned");
+    assert_eq!(
+        t.token.balance(&t.user),
+        initial_balance,
+        "principal fully returned"
+    );
     assert!(t.client.get_stake(&t.user).is_none());
     assert_eq!(t.client.get_credits(&t.user), 0);
 }
@@ -1019,7 +1023,10 @@ fn test_accept_admin_requires_proposed_address_auth() {
             },
         }])
         .try_accept_admin();
-    assert!(current_admin_result.is_err(), "current admin may not accept");
+    assert!(
+        current_admin_result.is_err(),
+        "current admin may not accept"
+    );
 
     let third_party_result = client
         .mock_auths(&[MockAuth {
@@ -1399,7 +1406,12 @@ fn test_unlock_assets_final_outcome_is_invariant_to_how_the_withdrawal_is_split(
                             soroban_sdk::symbol_short!("pool").into_val(&t.env),
                             soroban_sdk::symbol_short!("chkpt").into_val(&t.env)
                         ],
-                        (t.user.clone(), EXPECTED_TOTAL_CREDITS, EXPECTED_TOTAL_CREDITS).into_val(&t.env),
+                        (
+                            t.user.clone(),
+                            EXPECTED_TOTAL_CREDITS,
+                            EXPECTED_TOTAL_CREDITS
+                        )
+                            .into_val(&t.env),
                     ),
                     (
                         t.contract_id.clone(),
@@ -1841,7 +1853,7 @@ fn test_unpause_restores_stake() {
     t.client.pause();
     t.client.unpause();
     t.client.stake(&t.user, &500);
-       assert_eq!(t.client.get_stake(&t.user).unwrap().amount, 500);
+    assert_eq!(t.client.get_stake(&t.user).unwrap().amount, 500);
 }
 
 #[test]
@@ -1986,7 +1998,10 @@ fn test_emergency_withdraw_requires_user_auth() {
             },
         }])
         .try_emergency_withdraw(&user);
-    assert!(unauth_result.is_err(), "third party cannot trigger emergency withdraw without user auth");
+    assert!(
+        unauth_result.is_err(),
+        "third party cannot trigger emergency withdraw without user auth"
+    );
 }
 
 // ── Whitelist system tests ───────────────────────────────────────────────────
@@ -2810,5 +2825,3 @@ fn test_migrate_schema_version_framework() {
     let prev = t.client.migrate();
     assert_eq!(prev, 1);
 }
-
-

@@ -723,6 +723,18 @@
                       "key": {
                         "vec": [
                           {
+                            "symbol": "TotalDeposits"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "i128": "1000"
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
                             "symbol": "TotalDistributedCredits"
                           }
                         ]
@@ -735,12 +747,36 @@
                       "key": {
                         "vec": [
                           {
+                            "symbol": "TotalLocked"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "i128": "1500"
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
                             "symbol": "TotalStaked"
                           }
                         ]
                       },
                       "val": {
                         "i128": "1500"
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "TotalWithdrawals"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "i128": "1000"
                       }
                     },
                     {

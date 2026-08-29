@@ -347,7 +347,7 @@ fn test_list_pools_returns_first_page() {
     assert_eq!(page.records.len(), 10);
     assert_eq!(page.next_start_id, 10);
     assert_eq!(page.total, 25);
-    assert_eq!(page.has_more, true);
+    assert!(page.has_more);
 
     assert_eq!(
         page.records
@@ -371,7 +371,7 @@ fn test_list_pools_returns_second_page() {
     assert_eq!(page.records.len(), 10);
     assert_eq!(page.next_start_id, 20);
     assert_eq!(page.total, 25);
-    assert_eq!(page.has_more, true);
+    assert!(page.has_more);
     assert_eq!(page.records.get(0).map(|record| record.0), Some(10));
     assert_eq!(page.records.get(9).map(|record| record.0), Some(19));
 }
@@ -384,7 +384,7 @@ fn test_list_pools_returns_partial_last_page() {
     assert_eq!(page.records.len(), 5);
     assert_eq!(page.next_start_id, 25);
     assert_eq!(page.total, 25);
-    assert_eq!(page.has_more, false);
+    assert!(!page.has_more);
     assert_eq!(page.records.get(0).map(|record| record.0), Some(20));
     assert_eq!(page.records.get(4).map(|record| record.0), Some(24));
 }
@@ -397,7 +397,7 @@ fn test_list_pools_returns_empty_when_start_is_beyond_count() {
     assert_eq!(page.records.len(), 0);
     assert_eq!(page.next_start_id, 3);
     assert_eq!(page.total, 3);
-    assert_eq!(page.has_more, false);
+    assert!(!page.has_more);
 }
 
 #[test]
@@ -408,7 +408,7 @@ fn test_list_pools_caps_limit_at_twenty() {
     assert_eq!(page.records.len(), 20);
     assert_eq!(page.next_start_id, 20);
     assert_eq!(page.total, 25);
-    assert_eq!(page.has_more, true);
+    assert!(page.has_more);
     assert_eq!(page.records.get(19).map(|record| record.0), Some(19));
 }
 
@@ -420,13 +420,13 @@ fn test_list_pools_has_more_flag_accuracy() {
     let page1 = t.client.list_pools(&0u32, &3u32);
     assert_eq!(page1.records.len(), 3);
     assert_eq!(page1.next_start_id, 3);
-    assert_eq!(page1.has_more, true);
+    assert!(page1.has_more);
 
     // Next page (start 3, limit 3 of 5) -> has_more is false (reaches end: 5)
     let page2 = t.client.list_pools(&page1.next_start_id, &3u32);
     assert_eq!(page2.records.len(), 2);
     assert_eq!(page2.next_start_id, 5);
-    assert_eq!(page2.has_more, false);
+    assert!(!page2.has_more);
 }
 
 // ── get_pools_by_asset ────────────────────────────────────────────────────────
@@ -556,7 +556,13 @@ fn test_upgrade_pool_hot_swaps_registered_pool_without_changing_factory_hash() {
                     symbol_short!("factory").into_val(&t.env),
                     symbol_short!("pool_upg").into_val(&t.env),
                 ],
-                (pool_id, pool_addr.clone(), t.wasm_hash.clone(), new_wasm_hash.clone()).into_val(&t.env),
+                (
+                    pool_id,
+                    pool_addr.clone(),
+                    t.wasm_hash.clone(),
+                    new_wasm_hash.clone()
+                )
+                    .into_val(&t.env),
             )
         ]
     );
@@ -953,7 +959,8 @@ fn test_get_pools_by_asset_range_custom_scan_limit() {
     assert_eq!(page1.next_start_id, 50);
 
     // Second call scanning 50..100 should find the match at 90
-    let page2 = client.get_pools_by_asset_range(&sparse_asset, &page1.next_start_id, &50u32, &20u32);
+    let page2 =
+        client.get_pools_by_asset_range(&sparse_asset, &page1.next_start_id, &50u32, &20u32);
     assert_eq!(page2.records.len(), 1);
     assert_eq!(page2.records.get(0).unwrap().0, 90);
     assert_eq!(page2.next_start_id, 100);
@@ -1282,7 +1289,18 @@ fn test_create_pool_emits_pool_crtd_event_with_payload() {
                     symbol_short!("factory").into_val(&t.env),
                     symbol_short!("pool_crtd").into_val(&t.env),
                 ],
-                (id, expected_address, asset, 300i128, 2u32, 30u32, 5_184_000u128, t.wasm_hash.clone()).into_val(&t.env),
+                (
+                    id,
+                    expected_address,
+                    t.admin.clone(),
+                    asset,
+                    300i128,
+                    2u32,
+                    30u32,
+                    5_184_000u128,
+                    t.wasm_hash.clone()
+                )
+                    .into_val(&t.env),
             )
         ]
     );
@@ -1370,10 +1388,10 @@ fn test_create_pool_initializes_real_farming_pool_atomically() {
 #[test]
 fn test_pause_pool_creation_prevents_create_pool() {
     let t = setup();
-    assert_eq!(t.client.is_pool_creation_paused(), false);
+    assert!(!t.client.is_pool_creation_paused());
 
     t.client.pause_pool_creation();
-    assert_eq!(t.client.is_pool_creation_paused(), true);
+    assert!(t.client.is_pool_creation_paused());
 
     let asset = Address::generate(&t.env);
     let result = t
@@ -1387,10 +1405,10 @@ fn test_pause_pool_creation_prevents_create_pool() {
 fn test_unpause_pool_creation_allows_create_pool() {
     let t = setup();
     t.client.pause_pool_creation();
-    assert_eq!(t.client.is_pool_creation_paused(), true);
+    assert!(t.client.is_pool_creation_paused());
 
     t.client.unpause_pool_creation();
-    assert_eq!(t.client.is_pool_creation_paused(), false);
+    assert!(!t.client.is_pool_creation_paused());
 
     let asset = Address::generate(&t.env);
     let pool_id = t
@@ -1477,4 +1495,31 @@ fn test_get_pools_by_admin_returns_created_pools() {
 
     let pools = t.client.get_pools_by_admin(&t.admin);
     assert_eq!(pools, vec![&t.env, id1, id2]);
+}
+
+#[test]
+fn test_get_admin_pool_count_tracks_pools_created_by_admin() {
+    let t = setup();
+    assert_eq!(t.client.get_admin_pool_count(&t.admin), 0);
+
+    let asset1 = Address::generate(&t.env);
+    t.client
+        .create_pool(&asset1, &1_728_000u128, &2u32, &10u64, &0i128);
+    assert_eq!(t.client.get_admin_pool_count(&t.admin), 1);
+
+    let asset2 = Address::generate(&t.env);
+    t.client
+        .create_pool(&asset2, &3_456_000u128, &2u32, &20u64, &0i128);
+    assert_eq!(t.client.get_admin_pool_count(&t.admin), 2);
+
+    let other_admin = Address::generate(&t.env);
+    assert_eq!(t.client.get_admin_pool_count(&other_admin), 0);
+}
+
+#[test]
+fn test_get_admin_pool_count_uninitialized_returns_not_initialized() {
+    let (_env, client) = setup_uninitialized();
+    let admin = Address::generate(&_env);
+    let result = client.try_get_admin_pool_count(&admin);
+    assert!(matches!(result, Err(Ok(FactoryError::NotInitialized))));
 }

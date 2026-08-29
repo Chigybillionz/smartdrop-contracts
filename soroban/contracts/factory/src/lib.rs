@@ -71,6 +71,14 @@ fn bump_asset_pools(env: &Env, asset: &Address) {
     );
 }
 
+fn bump_wasm_pools(env: &Env, wasm_hash: &BytesN<32>) {
+    env.storage().persistent().extend_ttl(
+        &DataKey::PoolsByWasmHash(wasm_hash.clone()),
+        TTL_THRESHOLD,
+        TTL_EXTEND_TO,
+    );
+}
+
 /// Reject any call that lands on a factory whose state was never seeded.
 ///
 /// `initialize` is the only writer of `DataKey::Admin`, so its presence is the
@@ -463,6 +471,76 @@ impl Factory {
         Self::get_pools_by_asset_range(env, asset, start_id, MAX_POOL_SCAN_PER_CALL, limit)
     }
 
+    /// Return a page of pool records deployed or upgraded to the given `wasm_hash`.
+    ///
+    /// Uses the `PoolsByWasmHash` secondary index populated by `create_pool` and
+    /// updated by `upgrade_pool`, so this is a direct O(m) lookup in the indexed
+    /// list — callers do not need to scan the full registry. `start_idx` is a
+    /// 0-based offset *within the matching ID list* (not a pool ID window), and
+    /// `limit` is capped at 20 matching records per call.
+    ///
+    /// Pools whose WASM was changed via `upgrade_pool` are removed from their
+    /// old hash's list and added to the new hash's list, so each pool ID appears
+    /// in exactly one index entry at a time.
+    ///
+    /// Returns `NotInitialized` if the factory has not been initialized. An
+    /// empty `records` list with `has_more = false` indicates that no pools
+    /// match (or the start_idx is past the end of the list).
+    pub fn get_pools_by_wasm_hash(
+        env: Env,
+        wasm_hash: BytesN<32>,
+        start_idx: u32,
+        limit: u32,
+    ) -> Result<ListPoolsResponse, FactoryError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::PoolCount)
+            .unwrap_or(0);
+        let capped_limit = if limit == 0 { 20 } else { limit.min(20) };
+
+        let wasm_key = DataKey::PoolsByWasmHash(wasm_hash.clone());
+        let matching_ids: Vec<u32> = env
+            .storage()
+            .persistent()
+            .get(&wasm_key)
+            .unwrap_or_else(|| vec![&env]);
+        bump_wasm_pools(&env, &wasm_hash);
+
+        let mut records: Vec<(u32, PoolRecord)> = vec![&env];
+        let total_matches = matching_ids.len();
+        let mut next_start_idx = total_matches;
+        let mut collected = 0u32;
+        let mut i = start_idx;
+        while i < total_matches && collected < capped_limit {
+            let pool_id = matching_ids.get(i).unwrap();
+            let pool_key = DataKey::Pool(pool_id);
+            if let Some(record) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, PoolRecord>(&pool_key)
+            {
+                bump_pool(&env, pool_id);
+                records.push_back((pool_id, record));
+                collected += 1;
+            }
+            i += 1;
+        }
+        if i < total_matches {
+            next_start_idx = i;
+        }
+
+        let has_more = next_start_idx < total_matches;
+        Ok(ListPoolsResponse {
+            records,
+            next_start_id: next_start_idx,
+            total: count,
+            has_more,
+        })
+    }
+
     /// Refresh TTLs for a range of pool records to prevent archival.
     ///
     /// This permissionless function allows keepers or any caller to proactively
@@ -637,6 +715,31 @@ impl Factory {
         let old_hash = record.wasm_hash.clone();
         record.wasm_hash = new_wasm_hash.clone();
         env.storage().persistent().set(&key, &record);
+
+        let old_wasm_key = DataKey::PoolsByWasmHash(old_hash.clone());
+        if let Some(mut old_pool_ids) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, Vec<u32>>(&old_wasm_key)
+        {
+            let mut new_old_ids: Vec<u32> = vec![&env];
+            for id in old_pool_ids.iter() {
+                if id != pool_id {
+                    new_old_ids.push_back(id);
+                }
+            }
+            env.storage().persistent().set(&old_wasm_key, &new_old_ids);
+        }
+
+        let new_wasm_key = DataKey::PoolsByWasmHash(new_wasm_hash.clone());
+        let mut new_pool_ids: Vec<u32> = env
+            .storage()
+            .persistent()
+            .get(&new_wasm_key)
+            .unwrap_or_else(|| vec![&env]);
+        new_pool_ids.push_back(pool_id);
+        env.storage().persistent().set(&new_wasm_key, &new_pool_ids);
+        bump_wasm_pools(&env, &new_wasm_hash);
 
         env.storage()
             .instance()
@@ -863,6 +966,17 @@ impl Factory {
         asset_pool_ids.push_back(pool_id);
         env.storage().persistent().set(&asset_key, &asset_pool_ids);
         bump_asset_pools(&env, &asset);
+
+        let wasm_key = DataKey::PoolsByWasmHash(wasm_hash.clone());
+        let mut wasm_pool_ids: Vec<u32> = env
+            .storage()
+            .persistent()
+            .get(&wasm_key)
+            .unwrap_or_else(|| vec![&env]);
+        wasm_pool_ids.push_back(pool_id);
+        env.storage().persistent().set(&wasm_key, &wasm_pool_ids);
+        bump_wasm_pools(&env, &wasm_hash);
+
         env.storage()
             .instance()
             .set(&DataKey::PoolCount, &next_count);

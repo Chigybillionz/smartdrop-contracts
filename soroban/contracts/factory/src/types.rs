@@ -1,4 +1,4 @@
-use soroban_sdk::{contracterror, contracttype, Address, Vec};
+use soroban_sdk::{contracterror, contracttype, Address, BytesN, Vec};
 
 /// Storage keys used by the factory contract.
 #[contracttype]
@@ -17,6 +17,10 @@ pub enum DataKey {
     AdminTransferCount,
     /// Running total of successful `upgrade_pool` calls, for version tracking (#258).
     UpgradeCount,
+    /// Secondary index: list of pool IDs whose staking asset matches.
+    AssetPools(Address),
+    /// Secondary index: list of pool IDs deployed or upgraded to a given WASM hash.
+    PoolsByWasmHash(BytesN<32>),
 }
 
 /// On-chain record for a registered farming pool.

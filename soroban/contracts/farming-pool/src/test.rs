@@ -945,15 +945,15 @@ fn test_get_position_credits_and_get_stake_credits_distinguish_systems() {
 
     advance_ledgers(&t.env, 10);
 
-    // Position credits = 500 * (1 + 0.5 * (2-1)) * 1 * 10 = 7_500
-    assert_eq!(t.client.get_position_credits(&t.user), 7_500);
-    assert_eq!(t.client.calculate_credits(&t.user), 7_500);
+    // Position credits = 500 * 1 * 10 = 5_000
+    assert_eq!(t.client.get_position_credits(&t.user), 5_000);
+    assert_eq!(t.client.calculate_credits(&t.user), 5_000);
 
     // Stake credits = 1500 * 1 * 10 = 15_000
     assert_eq!(t.client.get_stake_credits(&t.user), 15_000);
 
-    // Combined get_credits = 7_500 + 15_000 = 22_500
-    assert_eq!(t.client.get_credits(&t.user), 22_500);
+    // Combined get_credits = 5_000 + 15_000 = 20_000
+    assert_eq!(t.client.get_credits(&t.user), 20_000);
 }
 
 // ── lock_assets tests ─────────────────────────────────────────────────────────
@@ -2011,9 +2011,12 @@ fn test_global_multiplier_change_does_not_affect_locked_position_credits() {
     // The multiplier change to 5 must have ZERO effect on locked position credit accrual.
     assert_eq!(t.client.calculate_credits(&t.user), 20_000);
 
-    // Stake side: uncheckpointed window retroactively reflects multiplier = 5.
-    // 100% boost -> effective stake 5,000. Credits = 5,000 * 1 * 20 = 100,000.
-    assert_eq!(t.client.get_credits(&t.user), 100_000);
+    // Stake side: uncheckpointed window correctly tracks pre/post multiplier change.
+    // Pre-change (ledgers 0-10, mult=1, 100% boost -> effective 1000): 1000 * 1 * 10 = 10,000.
+    // Post-change (ledgers 10-20, mult=5, 100% boost -> effective 5000): 5000 * 1 * 10 = 50,000.
+    // Total stake credits = 60,000.
+    // Total credits = 20,000 (lock) + 60,000 (stake) = 80,000.
+    assert_eq!(t.client.get_credits(&t.user), 80_000);
 
     // Unlock assets and verify position credits bank cleanly.
     t.client.unlock_assets(&t.user, &1_000);

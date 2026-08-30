@@ -157,22 +157,6 @@ fn setup_with_pool_records(count: u32) -> TestEnv {
     t
 }
 
-/// Builds an initialised factory *without* `mock_all_auths` so that
-/// `mock_auths` / `try_*` patterns can assert on auth failures.
-fn setup_without_mocked_auth() -> (Env, Address, FactoryClient<'static>, Address, Address) {
-    let env = Env::default();
-    // Deliberately no env.mock_all_auths()
-    let admin = Address::generate(&env);
-    let user = Address::generate(&env);
-    let wasm_hash = upload_farming_pool_wasm(&env);
-    let factory_addr = env.register(Factory, ());
-    let client = FactoryClient::new(&env, &factory_addr);
-    client.initialize(&admin, &wasm_hash);
-    let client =
-        unsafe { core::mem::transmute::<FactoryClient<'_>, FactoryClient<'static>>(client) };
-    (env, factory_addr, client, admin, user)
-}
-
 // ── initialize ────────────────────────────────────────────────────────────────
 
 fn advance_ledgers(env: &Env, by: u32) {

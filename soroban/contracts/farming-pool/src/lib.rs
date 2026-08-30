@@ -649,10 +649,7 @@ fn checkpoint(env: &Env, user: &Address, stake: &mut UserStake) {
 fn checkpoint_position(env: &Env, user: &Address, position: &mut Position) {
     let current = env.ledger().sequence();
     let elapsed = current.saturating_sub(position.checkpoint_ledger);
-    let allocation_pct = get_user_boost(env, user).unwrap_or(0);
-    let effective_amount =
-        compute_total_stake(position.amount, allocation_pct, read_global_multiplier(env));
-    let delta = effective_amount * position.credit_rate * elapsed as i128;
+    let delta = position.amount * position.credit_rate * elapsed as i128;
     position.total_credits += delta;
     add_total_credits(env, delta);
     add_total_distributed_credits(env, delta);
@@ -1018,13 +1015,7 @@ impl FarmingPool {
             .ledger()
             .sequence()
             .saturating_sub(position.checkpoint_ledger);
-        let allocation_pct = get_user_boost(&env, &user).unwrap_or(0);
-        let effective_amount = compute_total_stake(
-            position.amount,
-            allocation_pct,
-            read_global_multiplier(&env),
-        );
-        Ok(position.total_credits + effective_amount * position.credit_rate * elapsed as i128)
+        Ok(position.total_credits + position.amount * position.credit_rate * elapsed as i128)
     }
 
     /// Return current accrued credits for a user's time-locked `Position`.
@@ -1042,13 +1033,7 @@ impl FarmingPool {
         };
         let current = env.ledger().sequence();
         let elapsed = current.saturating_sub(position.checkpoint_ledger);
-        let allocation_pct = get_user_boost(&env, &user).unwrap_or(0);
-        let effective_amount = compute_total_stake(
-            position.amount,
-            allocation_pct,
-            read_global_multiplier(&env),
-        );
-        position.total_credits += effective_amount * position.credit_rate * elapsed as i128;
+        position.total_credits += position.amount * position.credit_rate * elapsed as i128;
         position.checkpoint_ledger = current;
         position.credit_rate = read_credit_rate(&env);
         Ok(Some(position))
@@ -1734,13 +1719,7 @@ impl FarmingPool {
                     .ledger()
                     .sequence()
                     .saturating_sub(position.checkpoint_ledger);
-                let allocation_pct = get_user_boost(&env, &user).unwrap_or(0);
-                let effective_amount = compute_total_stake(
-                    position.amount,
-                    allocation_pct,
-                    read_global_multiplier(&env),
-                );
-                position.total_credits + effective_amount * position.credit_rate * elapsed as i128
+                position.total_credits + position.amount * position.credit_rate * elapsed as i128
             })
             .unwrap_or(0);
 

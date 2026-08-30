@@ -2793,8 +2793,6 @@ fn test_lock_assets_top_up_extends_unlock_ledger() {
     advance_ledgers(&t.env, 3); // now sequence is start_ledger + 15
     t.client.unlock_assets(&t.user, &1_500);
 }
-<<<<<<< HEAD
-=======
 
 #[test]
 fn test_lock_count_increments_on_every_lock_operation() {
@@ -2883,4 +2881,3 @@ fn test_migrate_schema_version_framework() {
     let prev = t.client.migrate();
     assert_eq!(prev, 1);
 }
->>>>>>> upstream/main

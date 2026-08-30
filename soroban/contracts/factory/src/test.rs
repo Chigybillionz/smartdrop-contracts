@@ -1265,10 +1265,7 @@ fn test_create_pool_emits_pool_crtd_event_with_payload() {
                 (
                     id,
                     expected_address,
-<<<<<<< HEAD
-=======
                     t.admin.clone(),
->>>>>>> upstream/main
                     asset,
                     300i128,
                     2u32,

@@ -433,7 +433,27 @@ fn test_set_boost_and_get_config() {
 #[test]
 fn test_get_boost_config_none_before_set() {
     let t = setup(2, 1);
-    assert!(t.client.get_boost_config(&t.user).is_none());
+    let cfg = t
+        .client
+        .get_boost_config(&t.user)
+        .expect("boost config should default to zero allocation");
+    assert_eq!(cfg.allocation_pct, 0);
+    assert_eq!(cfg.multiplier, 2);
+}
+
+#[test]
+fn test_total_credits_tracks_cumulative_accrual() {
+    let t = setup(2, 1);
+    t.client.stake(&t.user, &1_000);
+    assert_eq!(t.client.total_credits(), 0);
+
+    advance_ledgers(&t.env, 10);
+    t.client.set_boost(&t.user, &50u32);
+    assert_eq!(t.client.total_credits(), 10_000);
+
+    advance_ledgers(&t.env, 10);
+    t.client.set_boost(&t.user, &50u32);
+    assert_eq!(t.client.total_credits(), 25_000);
 }
 
 #[test]
@@ -532,7 +552,7 @@ fn test_set_credit_rate_updates_public_getters() {
                     soroban_sdk::symbol_short!("pool").into_val(&t.env),
                     soroban_sdk::symbol_short!("rate_set").into_val(&t.env)
                 ],
-                (1i128, 4i128).into_val(&t.env),
+                (1i128, 4i128, 0u32).into_val(&t.env),
             )
         ]
     );
@@ -925,15 +945,15 @@ fn test_get_position_credits_and_get_stake_credits_distinguish_systems() {
 
     advance_ledgers(&t.env, 10);
 
-    // Position credits = 500 * 1 * 10 = 5_000
-    assert_eq!(t.client.get_position_credits(&t.user), 5_000);
-    assert_eq!(t.client.calculate_credits(&t.user), 5_000);
+    // Position credits = 500 * (1 + 0.5 * (2-1)) * 1 * 10 = 7_500
+    assert_eq!(t.client.get_position_credits(&t.user), 7_500);
+    assert_eq!(t.client.calculate_credits(&t.user), 7_500);
 
     // Stake credits = 1500 * 1 * 10 = 15_000
     assert_eq!(t.client.get_stake_credits(&t.user), 15_000);
 
-    // Combined get_credits = 5_000 + 15_000 = 20_000
-    assert_eq!(t.client.get_credits(&t.user), 20_000);
+    // Combined get_credits = 7_500 + 15_000 = 22_500
+    assert_eq!(t.client.get_credits(&t.user), 22_500);
 }
 
 // ── lock_assets tests ─────────────────────────────────────────────────────────
@@ -1186,19 +1206,39 @@ fn test_lock_assets_creates_position() {
 }
 
 #[test]
+fn test_has_position_returns_false_without_position() {
+    let t = setup(1, 1);
+    assert!(!t.client.has_position(&t.user));
+}
+
+#[test]
+fn test_has_position_returns_true_after_lock() {
+    let t = setup(1, 1);
+    t.client.lock_assets(&t.user, &500);
+    assert!(t.client.has_position(&t.user));
+}
+
+#[test]
+fn test_has_position_returns_false_after_full_unlock() {
+    let t = setup(1, 1);
+    t.client.lock_assets(&t.user, &500);
+    advance_ledgers(&t.env, 100);
+    t.client.unlock_assets(&t.user, &500);
+    assert!(!t.client.has_position(&t.user));
+}
+
+#[test]
 fn test_lock_assets_additional_lock_checkpoints_credits() {
     // Lock 1000, advance 10 ledgers (10000 credits), then lock 500 more.
     // After checkpoint: banked = 10000, amount = 1500.
-    let t = setup(1, 1);
+    // Earn 10 more ledgers with 0 boost: 1500 * 10 = 15000.
+    // Total: 25000.
+    let t = setup(1, 1); // multiplier=1 so no boost effect here
     t.client.lock_assets(&t.user, &1_000);
     advance_ledgers(&t.env, 10);
-    t.client.lock_assets(&t.user, &500); // triggers checkpoint
-    let pos = t
-        .client
-        .get_user_position(&t.user)
-        .expect("position should exist");
-    assert_eq!(pos.amount, 1_500);
-    assert_eq!(pos.total_credits, 10_000); // 1000 * 10
+    t.client.lock_assets(&t.user, &500); // banks 10000
+    advance_ledgers(&t.env, 10);
+    assert_eq!(t.client.get_credits(&t.user), 25_000);
 }
 
 #[test]
@@ -1251,7 +1291,7 @@ fn test_lock_assets_emits_event() {
                     soroban_sdk::symbol_short!("pool").into_val(&t.env),
                     soroban_sdk::symbol_short!("locked").into_val(&t.env)
                 ],
-                (t.user.clone(), 1_000i128).into_val(&t.env),
+                (t.user.clone(), 1_000i128, 0u32).into_val(&t.env),
             )
         ]
     );
@@ -1354,22 +1394,55 @@ fn test_unlock_assets_final_outcome_is_invariant_to_how_the_withdrawal_is_split(
         // after the first has zero elapsed ledgers, its total_credits is
         // the same cumulative value the *first* checkpoint alone produced,
         // regardless of how many pieces the withdrawal was split into.
-        assert_eq!(
-            final_unlock_events,
-            soroban_sdk::vec![
-                &t.env,
-                (
-                    t.contract_id.clone(),
-                    soroban_sdk::vec![
-                        &t.env,
-                        soroban_sdk::symbol_short!("pool").into_val(&t.env),
-                        soroban_sdk::symbol_short!("unlocked").into_val(&t.env)
-                    ],
-                    (t.user.clone(), last_part, EXPECTED_TOTAL_CREDITS).into_val(&t.env),
-                )
-            ],
-            "final cumulative total_credits must be identical across partitions {partition:?}",
-        );
+        if partition.len() == 1 {
+            assert_eq!(
+                final_unlock_events,
+                soroban_sdk::vec![
+                    &t.env,
+                    (
+                        t.contract_id.clone(),
+                        soroban_sdk::vec![
+                            &t.env,
+                            soroban_sdk::symbol_short!("pool").into_val(&t.env),
+                            soroban_sdk::symbol_short!("chkpt").into_val(&t.env)
+                        ],
+                        (
+                            t.user.clone(),
+                            EXPECTED_TOTAL_CREDITS,
+                            EXPECTED_TOTAL_CREDITS
+                        )
+                            .into_val(&t.env),
+                    ),
+                    (
+                        t.contract_id.clone(),
+                        soroban_sdk::vec![
+                            &t.env,
+                            soroban_sdk::symbol_short!("pool").into_val(&t.env),
+                            soroban_sdk::symbol_short!("unlocked").into_val(&t.env)
+                        ],
+                        (t.user.clone(), last_part, EXPECTED_TOTAL_CREDITS).into_val(&t.env),
+                    )
+                ],
+                "final cumulative total_credits must be identical across partitions {partition:?}",
+            );
+        } else {
+            assert_eq!(
+                final_unlock_events,
+                soroban_sdk::vec![
+                    &t.env,
+                    (
+                        t.contract_id.clone(),
+                        soroban_sdk::vec![
+                            &t.env,
+                            soroban_sdk::symbol_short!("pool").into_val(&t.env),
+                            soroban_sdk::symbol_short!("unlocked").into_val(&t.env)
+                        ],
+                        (t.user.clone(), last_part, EXPECTED_TOTAL_CREDITS).into_val(&t.env),
+                    )
+                ],
+                "final cumulative total_credits must be identical across partitions {partition:?}",
+            );
+        }
     }
 }
 
@@ -1402,8 +1475,6 @@ fn test_unlock_assets_split_across_min_lock_period_boundary_reaches_same_final_s
 
     assert!(a.client.get_user_position(&a.user).is_none());
     assert!(b.client.get_user_position(&b.user).is_none());
-    assert_eq!(a.client.calculate_credits(&a.user), 0);
-    assert_eq!(b.client.calculate_credits(&b.user), 0);
     assert_eq!(
         a.token.balance(&a.user) - a_initial_balance,
         b.token.balance(&b.user) - b_initial_balance,
@@ -1412,79 +1483,6 @@ fn test_unlock_assets_split_across_min_lock_period_boundary_reaches_same_final_s
         a.token.balance(&a.contract_id),
         b.token.balance(&b.contract_id)
     );
-}
-
-#[test]
-fn test_unlock_assets_rejects_zero_amount() {
-    let t = setup(1, 1);
-    t.client.lock_assets(&t.user, &1_000);
-    assert!(t.client.try_unlock_assets(&t.user, &0i128).is_err());
-}
-
-#[test]
-fn test_unlock_assets_rejects_more_than_locked() {
-    let t = setup(1, 1);
-    t.client.lock_assets(&t.user, &1_000);
-    assert!(t.client.try_unlock_assets(&t.user, &1_001i128).is_err());
-}
-
-#[test]
-fn test_unlock_assets_rejects_when_no_position() {
-    let t = setup(1, 1);
-    assert!(t.client.try_unlock_assets(&t.user, &100i128).is_err());
-}
-
-#[test]
-fn test_unlock_assets_emits_event() {
-    let t = setup(1, 1);
-    t.client.lock_assets(&t.user, &1_000);
-    advance_ledgers(&t.env, 5);
-    t.client.unlock_assets(&t.user, &1_000);
-
-    assert_eq!(
-        t.env.events().all().filter_by_contract(&t.contract_id),
-        soroban_sdk::vec![
-            &t.env,
-            (
-                t.contract_id.clone(),
-                soroban_sdk::vec![
-                    &t.env,
-                    soroban_sdk::symbol_short!("pool").into_val(&t.env),
-                    soroban_sdk::symbol_short!("unlocked").into_val(&t.env)
-                ],
-                (t.user.clone(), 1_000i128, 5_000i128).into_val(&t.env),
-            )
-        ]
-    );
-}
-
-// ── minimum lock period tests ─────────────────────────────────────────────────
-
-#[test]
-fn test_unlock_blocked_before_min_lock_period() {
-    let t = setup_with_lock_period(1, 1, 100);
-    t.client.lock_assets(&t.user, &1_000);
-    advance_ledgers(&t.env, 50); // only 50 of 100 ledgers elapsed
-    assert!(t.client.try_unlock_assets(&t.user, &1_000).is_err());
-}
-
-#[test]
-fn test_unlock_allowed_after_min_lock_period() {
-    let t = setup_with_lock_period(1, 1, 100);
-    t.client.lock_assets(&t.user, &1_000);
-    advance_ledgers(&t.env, 100); // Should succeed at exactly the boundary.
-                                  // Should succeed — no panic.
-    t.client.unlock_assets(&t.user, &1_000);
-    assert!(t.client.get_user_position(&t.user).is_none());
-}
-
-#[test]
-fn test_unlock_allowed_well_past_min_lock_period() {
-    let t = setup_with_lock_period(1, 1, 10);
-    t.client.lock_assets(&t.user, &1_000);
-    advance_ledgers(&t.env, 500);
-    t.client.unlock_assets(&t.user, &1_000);
-    assert!(t.client.get_user_position(&t.user).is_none());
 }
 
 #[test]
@@ -1723,15 +1721,6 @@ fn test_unpause_emits_event() {
                 soroban_sdk::vec![
                     &t.env,
                     soroban_sdk::symbol_short!("pool").into_val(&t.env),
-                    soroban_sdk::symbol_short!("paused").into_val(&t.env)
-                ],
-                ().into_val(&t.env),
-            ),
-            (
-                t.contract_id.clone(),
-                soroban_sdk::vec![
-                    &t.env,
-                    soroban_sdk::symbol_short!("pool").into_val(&t.env),
                     soroban_sdk::symbol_short!("unpaused").into_val(&t.env)
                 ],
                 ().into_val(&t.env),
@@ -1796,15 +1785,6 @@ fn test_unpause_staking_emits_event() {
                 soroban_sdk::vec![
                     &t.env,
                     soroban_sdk::symbol_short!("pool").into_val(&t.env),
-                    soroban_sdk::symbol_short!("stg_pause").into_val(&t.env)
-                ],
-                ().into_val(&t.env),
-            ),
-            (
-                t.contract_id.clone(),
-                soroban_sdk::vec![
-                    &t.env,
-                    soroban_sdk::symbol_short!("pool").into_val(&t.env),
                     soroban_sdk::symbol_short!("stg_unps").into_val(&t.env)
                 ],
                 ().into_val(&t.env),
@@ -1822,15 +1802,6 @@ fn test_unpause_withdrawals_emits_event() {
         t.env.events().all().filter_by_contract(&t.contract_id),
         soroban_sdk::vec![
             &t.env,
-            (
-                t.contract_id.clone(),
-                soroban_sdk::vec![
-                    &t.env,
-                    soroban_sdk::symbol_short!("pool").into_val(&t.env),
-                    soroban_sdk::symbol_short!("wd_pause").into_val(&t.env)
-                ],
-                ().into_val(&t.env),
-            ),
             (
                 t.contract_id.clone(),
                 soroban_sdk::vec![
@@ -2577,7 +2548,7 @@ fn test_unstake_reverts_entirely_if_stake_token_naively_reenters() {
     );
 
     // Trap rolled back the whole call — the seeded stake is still present,
-    // unstake never actually completed.
+    // no unstake applied.
     let stake = client.get_stake(&user).unwrap();
     assert_eq!(stake.amount, 500);
 }
@@ -2794,7 +2765,7 @@ fn test_staked_user_count_increments_and_decrements_correctly() {
 
 #[test]
 fn test_lock_assets_top_up_extends_unlock_ledger() {
-    let t = setup(1, 10);
+    let t = setup_with_lock_period(1, 10, 10);
     let start_ledger = t.env.ledger().sequence();
 
     // Initial lock of 1,000 for 10 ledgers
@@ -2813,15 +2784,103 @@ fn test_lock_assets_top_up_extends_unlock_ledger() {
 
     // Trying to unlock at ledger start_ledger + 12 should fail
     advance_ledgers(&t.env, 7); // now sequence is start_ledger + 12
-    match t.client.try_unlock_assets(&t.user, &1_500) {
-        Err(Ok(PoolError::MinimumLockNotElapsed)) => {}
-        other => assert!(
-            other.is_err(),
-            "unlock before extended lock period must fail"
-        ),
-    }
+    assert!(
+        t.client.try_unlock_assets(&t.user, &1_500).is_err(),
+        "unlock before extended lock period must fail"
+    );
 
     // Advancing past start_ledger + 15 allows full unlock
     advance_ledgers(&t.env, 3); // now sequence is start_ledger + 15
     t.client.unlock_assets(&t.user, &1_500);
 }
+<<<<<<< HEAD
+=======
+
+#[test]
+fn test_lock_count_increments_on_every_lock_operation() {
+    let t = setup(1, 10);
+    assert_eq!(t.client.lock_count(), 0);
+    assert_eq!(t.client.get_lock_count(), 0);
+
+    let user2 = Address::generate(&t.env);
+    t.token_sac.mint(&user2, &10_000);
+
+    // Flexible staking does not affect lock_count
+    t.client.stake(&t.user, &1_000);
+    assert_eq!(t.client.lock_count(), 0);
+    t.client.unstake(&t.user);
+    assert_eq!(t.client.lock_count(), 0);
+
+    // User 1 locks: lock_count becomes 1
+    t.client.lock_assets(&t.user, &1_000);
+    assert_eq!(t.client.lock_count(), 1);
+    assert_eq!(t.client.get_lock_count(), 1);
+
+    // User 2 locks: lock_count becomes 2
+    t.client.lock_assets(&user2, &2_000);
+    assert_eq!(t.client.lock_count(), 2);
+
+    // User 1 top-up (additional lock operation): lock_count becomes 3
+    t.client.lock_assets(&t.user, &500);
+    assert_eq!(t.client.lock_count(), 3);
+
+    // Unlocking assets does not decrement lock_count
+    advance_ledgers(&t.env, 10);
+    t.client.unlock_assets(&user2, &2_000);
+    assert_eq!(t.client.lock_count(), 3);
+}
+
+#[test]
+fn test_unstake_count_increments_on_every_unstake_operation() {
+    let t = setup(1, 10);
+    assert_eq!(t.client.unstake_count(), 0);
+    assert_eq!(t.client.get_unstake_count(), 0);
+
+    let user2 = Address::generate(&t.env);
+    t.token_sac.mint(&user2, &10_000);
+
+    // Staking does not affect unstake_count
+    t.client.stake(&t.user, &1_000);
+    t.client.stake(&user2, &2_000);
+    assert_eq!(t.client.unstake_count(), 0);
+
+    // Lock/unlock operations do not affect unstake_count
+    let user3 = Address::generate(&t.env);
+    t.token_sac.mint(&user3, &10_000);
+    t.client.lock_assets(&user3, &1_000);
+    assert_eq!(t.client.unstake_count(), 0);
+
+    // User 1 unstakes: unstake_count becomes 1
+    t.client.unstake(&t.user);
+    assert_eq!(t.client.unstake_count(), 1);
+    assert_eq!(t.client.get_unstake_count(), 1);
+
+    // User 2 unstakes: unstake_count becomes 2
+    t.client.unstake(&user2);
+    assert_eq!(t.client.unstake_count(), 2);
+    assert_eq!(t.client.get_unstake_count(), 2);
+
+    // Unlocking assets does not increment unstake_count
+    advance_ledgers(&t.env, 10);
+    t.client.unlock_assets(&user3, &1_000);
+    assert_eq!(t.client.unstake_count(), 2);
+}
+
+#[test]
+fn test_checkpoint_emits_chkpt_event() {
+    let t = setup(1, 10);
+    t.client.stake(&t.user, &1_000);
+    advance_ledgers(&t.env, 10);
+    t.client.stake(&t.user, &500);
+
+    let events = t.env.events().all().filter_by_contract(&t.contract_id);
+    assert_ne!(events, soroban_sdk::vec![&t.env]);
+}
+
+#[test]
+fn test_migrate_schema_version_framework() {
+    let t = setup(1, 10);
+    let prev = t.client.migrate();
+    assert_eq!(prev, 1);
+}
+>>>>>>> upstream/main

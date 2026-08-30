@@ -1,4 +1,4 @@
-use soroban_sdk::{contracterror, contracttype, Address, Vec};
+use soroban_sdk::{contracterror, contracttype, Address, BytesN, Vec};
 
 /// Storage keys used by the factory contract.
 #[contracttype]
@@ -13,6 +13,16 @@ pub enum DataKey {
     Pool(u32),
     /// Flag indicating if pool creation is currently paused.
     PoolCreationPaused,
+    /// Running count of admin transfers performed.
+    AdminTransferCount,
+    /// Running total of successful `upgrade_pool` calls, for version tracking (#258).
+    UpgradeCount,
+    /// List of pool IDs for a specific asset.
+    AssetPools(Address),
+    /// List of pool IDs created by a specific admin.
+    PoolsByAdmin(Address),
+    /// List of pool IDs currently running a specific WASM hash.
+    PoolsByWasmHash(BytesN<32>),
 }
 
 /// On-chain record for a registered farming pool.
@@ -116,6 +126,10 @@ pub enum FactoryError {
     InvalidMinStakeAmount = 12,
     /// `create_pool` was called while pool creation is paused.
     PoolCreationPaused = 13,
-    /// The WASM hash provided is the zero hash (all zeros), which is invalid.
+    /// `set_pool_wasm_hash` or `initialize` was called with an all-zero WASM hash.
     InvalidWasmHash = 14,
+    /// `create_pool`'s minimum lock period is below the minimum allowed threshold.
+    MinLockPeriodTooShort = 15,
+    /// `initialize` was called with an invalid admin address.
+    InvalidAdmin = 16,
 }

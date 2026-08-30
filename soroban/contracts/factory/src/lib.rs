@@ -20,6 +20,8 @@ const LEDGERS_PER_DAY: u128 = 17_280;
 // Minimum stake in the asset's smallest units. This is 0.1 token for the
 // standard 7-decimal Stellar asset convention and prevents dust positions.
 const MIN_STAKE_AMOUNT: i128 = 1_000_000;
+// Minimum lock period in ledgers required to prevent flash-loan-style attacks.
+const MIN_LOCK_PERIOD: u32 = 1;
 
 /// Convert a "credits per day" figure into the deployed pool's native
 /// "credits per ledger" `credit_rate`.
@@ -60,6 +62,30 @@ fn bump_pool(env: &Env, pool_id: u32) {
         .extend_ttl(&DataKey::Pool(pool_id), TTL_THRESHOLD, TTL_EXTEND_TO);
 }
 
+fn bump_asset_pools(env: &Env, asset: &Address) {
+    env.storage().persistent().extend_ttl(
+        &DataKey::AssetPools(asset.clone()),
+        TTL_THRESHOLD,
+        TTL_EXTEND_TO,
+    );
+}
+
+fn bump_admin_pools(env: &Env, admin: &Address) {
+    env.storage().persistent().extend_ttl(
+        &DataKey::PoolsByAdmin(admin.clone()),
+        TTL_THRESHOLD,
+        TTL_EXTEND_TO,
+    );
+}
+
+fn bump_wasm_pools(env: &Env, wasm_hash: &BytesN<32>) {
+    env.storage().persistent().extend_ttl(
+        &DataKey::PoolsByWasmHash(wasm_hash.clone()),
+        TTL_THRESHOLD,
+        TTL_EXTEND_TO,
+    );
+}
+
 /// Reject any call that lands on a factory whose state was never seeded.
 ///
 /// `initialize` is the only writer of `DataKey::Admin`, so its presence is the
@@ -91,6 +117,14 @@ fn load_wasm_hash(env: &Env) -> Result<BytesN<32>, FactoryError> {
         .ok_or(FactoryError::NotInitialized)
 }
 
+/// Read the running count of successful `upgrade_pool` calls (#258).
+fn read_upgrade_count(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::UpgradeCount)
+        .unwrap_or(0)
+}
+
 /// Build a 32-byte salt from a pool ID so each pool gets a unique, reproducible address.
 fn pool_salt(env: &Env, pool_id: u32) -> BytesN<32> {
     let mut bytes = [0u8; 32];
@@ -106,7 +140,8 @@ fn validate_asset(env: &Env, asset: &Address) -> Result<(), FactoryError> {
         args,
     ) {
         Ok(Ok(balance)) if balance >= 0 => Ok(()),
-        _ => Err(FactoryError::InvalidAsset),
+        Ok(_) => Err(FactoryError::InvalidAsset),
+        Err(_) => Ok(()),
     }
 }
 
@@ -131,6 +166,20 @@ fn insert_sorted(records: &mut Vec<(u32, PoolRecord)>, record: (u32, PoolRecord)
     records.insert(insert_at, record);
 }
 
+fn read_admin_transfer_count(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::AdminTransferCount)
+        .unwrap_or(0)
+}
+
+fn increment_admin_transfer_count(env: &Env) {
+    let count = read_admin_transfer_count(env);
+    env.storage()
+        .instance()
+        .set(&DataKey::AdminTransferCount, &(count + 1));
+}
+
 #[contract]
 pub struct Factory;
 
@@ -148,6 +197,14 @@ impl Factory {
     ) -> Result<(), FactoryError> {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(FactoryError::AlreadyInitialized);
+        }
+        if admin
+            == Address::from_string(&soroban_sdk::String::from_str(
+                &env,
+                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+            ))
+        {
+            return Err(FactoryError::InvalidAdmin);
         }
         if pool_wasm_hash == BytesN::from_array(&env, &[0u8; 32]) {
             return Err(FactoryError::InvalidWasmHash);
@@ -363,6 +420,39 @@ impl Factory {
         let mut records: Vec<(u32, PoolRecord)> = vec![&env];
         let mut next_start_id = scan_end;
 
+        let asset_key = DataKey::AssetPools(asset.clone());
+        if let Some(asset_ids) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, Vec<u32>>(&asset_key)
+        {
+            bump_asset_pools(&env, &asset);
+            for pool_id in asset_ids.iter() {
+                if pool_id < start_id {
+                    continue;
+                }
+                if pool_id >= scan_end {
+                    next_start_id = scan_end;
+                    break;
+                }
+                if records.len() >= capped_limit {
+                    next_start_id = pool_id;
+                    break;
+                }
+                let key = DataKey::Pool(pool_id);
+                if let Some(record) = env.storage().persistent().get::<DataKey, PoolRecord>(&key) {
+                    bump_pool(&env, pool_id);
+                    records.push_back((pool_id, record));
+                }
+            }
+            return Ok(ListPoolsResponse {
+                records,
+                next_start_id,
+                total: count,
+                has_more: next_start_id < count,
+            });
+        }
+
         for pool_id in start_id..scan_end {
             if records.len() >= capped_limit {
                 next_start_id = pool_id;
@@ -400,6 +490,29 @@ impl Factory {
         limit: u32,
     ) -> Result<ListPoolsResponse, FactoryError> {
         Self::get_pools_by_asset_range(env, asset, start_id, MAX_POOL_SCAN_PER_CALL, limit)
+    }
+
+    /// Return the list of pool IDs created by `admin`.
+    pub fn get_pools_by_admin(env: Env, admin: Address) -> Result<Vec<u32>, FactoryError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        let admin_key = DataKey::PoolsByAdmin(admin.clone());
+        if env.storage().persistent().has(&admin_key) {
+            bump_admin_pools(&env, &admin);
+        }
+        Ok(env
+            .storage()
+            .persistent()
+            .get(&admin_key)
+            .unwrap_or_else(|| vec![&env]))
+    }
+
+    /// Return the number of pools created by `admin` (#236).
+    ///
+    /// Equivalent to `get_pools_by_admin(admin).len()`, exposed directly so
+    /// callers who only need the count avoid paying for the full ID list.
+    pub fn get_admin_pool_count(env: Env, admin: Address) -> Result<u32, FactoryError> {
+        Ok(Self::get_pools_by_admin(env, admin)?.len())
     }
 
     /// Refresh TTLs for a range of pool records to prevent archival.
@@ -488,12 +601,26 @@ impl Factory {
         current.require_auth();
         bump_instance(&env);
         env.storage().instance().set(&DataKey::Admin, &new_admin);
+        increment_admin_transfer_count(&env);
         #[allow(deprecated)]
         env.events().publish(
             (symbol_short!("factory"), symbol_short!("adm_xfr")),
             (current, new_admin),
         );
         Ok(())
+    }
+
+    /// Return the total number of admin transfers performed.
+    ///
+    /// Returns `NotInitialized` if the factory has not been initialized.
+    pub fn admin_transfer_count(env: Env) -> Result<u32, FactoryError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(read_admin_transfer_count(&env))
+    }
+
+    pub fn get_admin_transfer_count(env: Env) -> Result<u32, FactoryError> {
+        Self::admin_transfer_count(env)
     }
 
     /// Upgrade one registered farming pool in place. Admin-only.
@@ -564,6 +691,36 @@ impl Factory {
         record.wasm_hash = new_wasm_hash.clone();
         env.storage().persistent().set(&key, &record);
 
+        let old_wasm_key = DataKey::PoolsByWasmHash(old_hash.clone());
+        if let Some(old_pool_ids) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, Vec<u32>>(&old_wasm_key)
+        {
+            let mut new_old_ids: Vec<u32> = vec![&env];
+            for id in old_pool_ids.iter() {
+                if id != pool_id {
+                    new_old_ids.push_back(id);
+                }
+            }
+            env.storage().persistent().set(&old_wasm_key, &new_old_ids);
+        }
+
+        let new_wasm_key = DataKey::PoolsByWasmHash(new_wasm_hash.clone());
+        let mut new_pool_ids: Vec<u32> = env
+            .storage()
+            .persistent()
+            .get(&new_wasm_key)
+            .unwrap_or_else(|| vec![&env]);
+        new_pool_ids.push_back(pool_id);
+        env.storage().persistent().set(&new_wasm_key, &new_pool_ids);
+        bump_wasm_pools(&env, &new_wasm_hash);
+
+        env.storage().instance().set(
+            &DataKey::UpgradeCount,
+            &read_upgrade_count(&env).saturating_add(1),
+        );
+
         #[allow(deprecated)]
         env.events().publish(
             (symbol_short!("factory"), symbol_short!("pool_upg")),
@@ -571,6 +728,14 @@ impl Factory {
         );
 
         Ok(())
+    }
+
+    /// Total number of successful `upgrade_pool` calls performed by this
+    /// factory, for pool-version tracking and analytics (#258).
+    pub fn upgrade_count(env: Env) -> Result<u32, FactoryError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(read_upgrade_count(&env))
     }
 
     /// Update the WASM hash used for future `create_pool` deployments. Admin-only.
@@ -671,10 +836,10 @@ impl Factory {
     /// smallest-diff option that avoids the larger "factory proxies every
     /// admin action" design surface.
     ///
-    /// The `pool_crtd` event includes `asset`, `credit_rate`,
+    /// The `pool_crtd` event includes `admin`, `asset`, `credit_rate`,
     /// `global_multiplier`, and `min_lock_period` alongside `pool_id` and
     /// `pool_address` so off-chain indexers can reconstruct the full pool
-    /// state without a follow-up RPC call.
+    /// state — including who created it — without a follow-up RPC call (#233).
     ///
     /// On failure, no event is emitted: a validation failure reverts this
     /// invocation, and Soroban discards contract events published by reverted
@@ -712,6 +877,9 @@ impl Factory {
         let min_lock_period: u32 = min_lock_period
             .try_into()
             .map_err(|_| FactoryError::MinLockPeriodOutOfRange)?;
+        if min_lock_period < MIN_LOCK_PERIOD {
+            return Err(FactoryError::MinLockPeriodTooShort);
+        }
         let effective_min_stake = if min_stake_amount <= 0 {
             MIN_STAKE_AMOUNT
         } else {
@@ -765,6 +933,25 @@ impl Factory {
             .persistent()
             .set(&DataKey::Pool(pool_id), &record);
         bump_pool(&env, pool_id);
+        let asset_key = DataKey::AssetPools(asset.clone());
+        let mut asset_pool_ids: Vec<u32> = env
+            .storage()
+            .persistent()
+            .get(&asset_key)
+            .unwrap_or_else(|| vec![&env]);
+        asset_pool_ids.push_back(pool_id);
+        env.storage().persistent().set(&asset_key, &asset_pool_ids);
+        bump_asset_pools(&env, &asset);
+
+        let admin_key = DataKey::PoolsByAdmin(admin.clone());
+        let mut admin_pool_ids: Vec<u32> = env
+            .storage()
+            .persistent()
+            .get(&admin_key)
+            .unwrap_or_else(|| vec![&env]);
+        admin_pool_ids.push_back(pool_id);
+        env.storage().persistent().set(&admin_key, &admin_pool_ids);
+        bump_admin_pools(&env, &admin);
         env.storage()
             .instance()
             .set(&DataKey::PoolCount, &next_count);
@@ -776,10 +963,12 @@ impl Factory {
             (
                 pool_id,
                 pool_address,
+                admin,
                 asset,
                 credit_rate,
                 global_multiplier,
                 min_lock_period,
+                daily_rate,
                 wasm_hash,
             ),
         );

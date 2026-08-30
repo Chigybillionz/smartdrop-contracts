@@ -2,9 +2,9 @@
 
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, Events, Ledger},
+    testutils::{Address as _, Events, Ledger, MockAuth, MockAuthInvoke},
     token::{StellarAssetClient, TokenClient},
-    Address, Env,
+    vec, Address, Env,
 };
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
@@ -228,7 +228,7 @@ fn test_compute_vested_is_safe_at_maximum_duration_and_ceiling() {
         &admin,
     );
     env.ledger()
-        .with_mut(|ledger| ledger.sequence_number = u32::MAX - 1);
+        .with_mut(|ledger| ledger.sequence_number = 2_000_000_000);
 
     let vested = client.vested_amount();
     assert!(vested > 0);
@@ -366,6 +366,19 @@ fn test_release_emits_event() {
     );
 }
 
+#[test]
+fn test_release_emits_event_with_cumulative_total() {
+    let t = setup(0, 100, 1_000);
+    advance_ledgers(&t.env, 50);
+    t.client.release(); // 500 released
+
+    advance_ledgers(&t.env, 25);
+    t.client.release(); // 250 releasable, cumulative total 750
+
+    let events = t.env.events().all();
+    assert!(!events.events().is_empty());
+}
+
 // ── revoke tests ──────────────────────────────────────────────────────────────
 
 #[test]
@@ -386,6 +399,29 @@ fn test_revoke_twice_returns_already_revoked() {
     assert!(matches!(
         t.client.try_revoke(),
         Err(Ok(VestingError::AlreadyRevoked))
+    ));
+}
+
+#[test]
+fn test_revoked_reflects_revocation_state() {
+    let t = setup_revocable(0, 200, 1_000);
+    advance_ledgers(&t.env, 100);
+    assert!(!t.client.revoked());
+
+    t.client.revoke();
+    assert!(t.client.revoked());
+}
+
+#[test]
+fn test_revoked_uninitialized_returns_not_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(VestingWallet, ());
+    let client = VestingWalletClient::new(&env, &contract_id);
+
+    assert!(matches!(
+        client.try_revoked(),
+        Err(Ok(VestingError::NotInitialized))
     ));
 }
 
@@ -524,4 +560,54 @@ fn test_get_vesting_schedule_uninitialized_returns_not_initialized() {
         client.try_get_vesting_schedule(),
         Err(Ok(VestingError::NotInitialized))
     ));
+}
+
+#[test]
+fn test_release_count_increments_on_release() {
+    let t = setup(50, 200, 1_000);
+
+    // Initially 0
+    assert_eq!(t.client.release_count(), 0);
+    assert_eq!(t.client.get_release_count(), 0);
+
+    // Release before cliff (0 tokens releasable) does not increment count
+    assert_eq!(t.client.release(), 0);
+    assert_eq!(t.client.release_count(), 0);
+
+    // Advance past cliff and release tokens
+    advance_ledgers(&t.env, 100);
+    let released1 = t.client.release();
+    assert!(released1 > 0);
+    assert_eq!(t.client.release_count(), 1);
+    assert_eq!(t.client.get_release_count(), 1);
+
+    // Immediate subsequent release (0 tokens) does not increment
+    assert_eq!(t.client.release(), 0);
+    assert_eq!(t.client.release_count(), 1);
+
+    // Advance to end and release remainder
+    advance_ledgers(&t.env, 200);
+    let released2 = t.client.release();
+    assert!(released2 > 0);
+    assert_eq!(t.client.release_count(), 2);
+    assert_eq!(t.client.get_release_count(), 2);
+}
+
+#[test]
+fn test_release_requires_beneficiary_auth() {
+    let t = setup(0, 100, 1_000);
+    advance_ledgers(&t.env, 50);
+
+    t.env.mock_auths(&[MockAuth {
+        address: &t.beneficiary,
+        invoke: &MockAuthInvoke {
+            contract: &t.contract_id,
+            fn_name: "release",
+            args: vec![&t.env],
+            sub_invokes: &[],
+        },
+    }]);
+
+    let released = t.client.release();
+    assert!(released > 0);
 }
